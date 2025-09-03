@@ -2,4 +2,5 @@ pip install PySide6
 pip install pandas
 pip install openpyxl
 pip install pyinstaller
-
+pip install PyQt5
+pip install pyqt5-tools

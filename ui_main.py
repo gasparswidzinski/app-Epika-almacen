@@ -1,3 +1,4 @@
+# ui_main.py
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
     QTableWidgetItem, QTextEdit, QFileDialog, QLineEdit, QLabel, QCheckBox,
@@ -10,19 +11,18 @@ import database
 from ui_formulario import FormularioProducto
 from ui_vender import FormularioVenta
 
-
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Gestor de Stock - Almacén")
         self.resize(1100, 600)
 
-        # --- Toolbar superior ---
-        toolbar = QToolBar("Menú principal")
+        # toolbar
+        toolbar = QToolBar("Principal")
         toolbar.setMovable(False)
         self.addToolBar(Qt.TopToolBarArea, toolbar)
 
-        # Acciones con íconos (texto Unicode)
+        # acciones
         self.act_agregar = QAction("➕ Agregar (F1)", self)
         self.act_editar = QAction("✏️ Editar (F3)", self)
         self.act_eliminar = QAction("🗑 Eliminar (Del)", self)
@@ -37,16 +37,16 @@ class MainWindow(QMainWindow):
                     self.act_reporte, self.act_bajo_stock]:
             toolbar.addAction(act)
 
-        # --- Layout central ---
+        # central widget
         central = QWidget()
         main_layout = QHBoxLayout(central)
 
-        # Panel izquierdo (tabla + búsqueda + filtro)
+        # left panel
         left_layout = QVBoxLayout()
         search_layout = QHBoxLayout()
         search_layout.addWidget(QLabel("🔎 Buscar:"))
         self.input_buscar = QLineEdit()
-        self.input_buscar.setPlaceholderText("Código o Nombre...")
+        self.input_buscar.setPlaceholderText("Código, Nombre o Código de Barras...")
         search_layout.addWidget(self.input_buscar)
         self.chk_bajo_stock = QCheckBox("Solo bajo stock (≤5)")
         search_layout.addWidget(self.chk_bajo_stock)
@@ -58,10 +58,9 @@ class MainWindow(QMainWindow):
 
         main_layout.addLayout(left_layout, stretch=3)
 
-        # Panel derecho (historial)
+        # right panel - historial
         right_layout = QVBoxLayout()
-        lbl_historial = QLabel("📜 Historial de movimientos")
-        right_layout.addWidget(lbl_historial)
+        right_layout.addWidget(QLabel("📜 Historial"))
         self.historial = QTextEdit()
         self.historial.setReadOnly(True)
         right_layout.addWidget(self.historial)
@@ -69,17 +68,17 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
 
-        # --- Barra de estado ---
+        # status bar
         self.status = QStatusBar()
         self.setStatusBar(self.status)
-        self.status.showMessage("✅ Aplicación iniciada - Base de datos lista")
+        self.status.showMessage("✅ Aplicación iniciada")
 
-        # Inicializar
+        # inicializar cache
         self._productos_cache = []
         self.actualizar_tabla()
         self.actualizar_historial()
 
-        # --- Conexiones ---
+        # conexiones
         self.act_agregar.triggered.connect(self.abrir_formulario)
         self.act_editar.triggered.connect(self.editar_producto)
         self.act_eliminar.triggered.connect(self.eliminar_producto)
@@ -92,15 +91,15 @@ class MainWindow(QMainWindow):
         self.input_buscar.textChanged.connect(self.aplicar_filtros)
         self.chk_bajo_stock.toggled.connect(self.aplicar_filtros)
 
-        # Atajos de teclado
+        # atajos
         self.act_agregar.setShortcut(QKeySequence("F1"))
         self.act_vender.setShortcut(QKeySequence("F2"))
         self.act_editar.setShortcut(QKeySequence("F3"))
         self.act_eliminar.setShortcut(QKeySequence("Delete"))
 
-    # -----------------------------
-    #   Gestión de la tabla
-    # -----------------------------
+    # -------------------------
+    # carga de productos / tabla
+    # -------------------------
     def _cargar_productos(self):
         self._productos_cache = database.obtener_productos()
         return self._productos_cache
@@ -110,14 +109,16 @@ class MainWindow(QMainWindow):
         self._pintar_tabla(productos)
 
     def _pintar_tabla(self, productos):
+        # columnas: id, codigo, nombre, cantidad, costo, sector, precio, codigo_barras, movimientos
+        headers = ["ID", "Código", "Nombre", "Cantidad", "Costo", "Sector", "Precio", "Código Barras", "Movs"]
+        self.table.setColumnCount(len(headers))
+        self.table.setHorizontalHeaderLabels(headers)
         self.table.setRowCount(len(productos))
-        self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["ID", "Código", "Nombre", "Cantidad", "Precio", "Movimientos"])
 
-        for row, prod in enumerate(productos):
-            for col, val in enumerate(prod):
+        for r, prod in enumerate(productos):
+            for c, val in enumerate(prod):
                 item = QTableWidgetItem(str(val))
-                if col == 3:  # Cantidad
+                if c == 3:  # cantidad
                     try:
                         cant = int(val)
                         if cant <= 5:
@@ -126,169 +127,111 @@ class MainWindow(QMainWindow):
                             item.setForeground(QColor("#777777"))
                     except:
                         pass
-                self.table.setItem(row, col, item)
-
+                self.table.setItem(r, c, item)
         self.table.resizeColumnsToContents()
-        # Ordenar automáticamente por Nombre (columna 2)
-        self.table.sortItems(2)
+        # ordenar por nombre (col 2)
+        try:
+            self.table.sortItems(2)
+        except:
+            pass
 
     def aplicar_filtros(self):
         texto = self.input_buscar.text().strip().lower()
         solo_bajo = self.chk_bajo_stock.isChecked()
-
         filtrados = []
         for prod in self._productos_cache:
-            _id, codigo, nombre, cantidad, precio, movs = prod
-            ok_texto = True
+            _id, codigo, nombre, cantidad, costo, sector, precio, codigobarras, movs = prod
+            ok_text = True
             if texto:
-                ok_texto = (texto in str(codigo).lower()) or (texto in str(nombre).lower())
-
+                ok_text = (texto in str(codigo).lower()) or (texto in str(nombre).lower()) or (texto in str(codigobarras).lower())
             ok_bajo = True
             if solo_bajo:
                 try:
                     ok_bajo = int(cantidad) <= 5
                 except:
                     ok_bajo = False
-
-            if ok_texto and ok_bajo:
+            if ok_text and ok_bajo:
                 filtrados.append(prod)
-
         self._pintar_tabla(filtrados)
 
-    # -----------------------------
-    #   Historial
-    # -----------------------------
+    # -------------------------
+    # historial
+    # -------------------------
     def actualizar_historial(self):
-        movimientos = database.obtener_movimientos()
+        movs = database.obtener_movimientos(200)
         self.historial.clear()
-        for nombre, cambio, precio, fecha in movimientos:
-            try:
-                c = int(cambio)
-                p = float(precio)
-            except:
-                c, p = cambio, precio
+        for mid, nombre, tipo, cambio, precio_unit, fecha, detalles in movs:
+            etiqueta = tipo
+            if tipo == "INGRESO":
+                etiqueta = "✅ Ingreso"
+            elif tipo == "VENTA":
+                etiqueta = "🛒 Venta"
+            elif tipo == "EDIT":
+                etiqueta = "✏️ Editado"
+            elif tipo == "ELIM":
+                etiqueta = "❌ Eliminado"
+            elif tipo == "REEMBOLSO":
+                etiqueta = "↩️ Reembolso"
+            linea = f"[{fecha}] {etiqueta}: {nombre} ({cambio}) ${precio_unit} {('- '+detalles) if detalles else ''}"
+            self.historial.append(linea)
 
-            if isinstance(c, int):
-                if c > 0:
-                    etiqueta = "✅ Ingreso"
-                    signo = f"+{c}"
-                elif c < 0:
-                    etiqueta = "🛒 Venta"
-                    signo = f"{c}"
-                else:
-                    etiqueta = "✏️ Editado" if p and float(p) > 0 else "❌ Eliminado"
-                    signo = "0"
-            else:
-                etiqueta = "ℹ️ Movimiento"
-                signo = str(c)
-
-            self.historial.append(f"[{fecha}] {etiqueta}: {nombre} ({signo}) ${precio}")
-
-    # -----------------------------
-    #   Operaciones
-    # -----------------------------
+    # -------------------------
+    # CRUD productos
+    # -------------------------
     def abrir_formulario(self):
         dialog = FormularioProducto(self)
         if dialog.exec():
-            datos = dialog.obtener_datos()
-            try:
-                if not datos["codigo"] or not datos["nombre"]:
-                    self.status.showMessage("⚠ Completá Código y Nombre", 5000)
-                    return
-                database.agregar_o_actualizar_producto(
-                    datos["codigo"],
-                    datos["nombre"],
-                    int(datos["cantidad"]),
-                    float(datos["precio"])
-                )
-                self.actualizar_tabla()
-                self.actualizar_historial()
-                self.aplicar_filtros()
-                self.status.showMessage(f"✅ Ingreso: {datos['nombre']} (+{int(datos['cantidad'])})", 5000)
-            except ValueError:
-                self.status.showMessage("⚠ Error: cantidad y precio deben ser números", 5000)
-
-    def exportar_excel(self):
-        productos = database.obtener_productos()
-        df = pd.DataFrame(productos, columns=["ID", "Código", "Nombre", "Cantidad", "Precio", "Movimientos"])
-        df.to_excel("stock.xlsx", index=False)
-        self.status.showMessage("✅ Exportado a stock.xlsx", 5000)
-
-    def importar_excel(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Seleccionar archivo Excel", "", "Excel Files (*.xlsx)")
-        if file_path:
-            try:
-                df = pd.read_excel(file_path)
-                requeridas = {"Codigo", "Nombre", "Cantidad", "Precio"}
-                if not requeridas.issubset(set(df.columns)):
-                    self.status.showMessage("⚠ El Excel debe tener columnas: Codigo, Nombre, Cantidad, Precio", 5000)
-                    return
-                for _, row in df.iterrows():
-                    database.agregar_o_actualizar_producto(
-                        str(row["Codigo"]),
-                        str(row["Nombre"]),
-                        int(row["Cantidad"]),
-                        float(row["Precio"])
-                    )
-                self.actualizar_tabla()
-                self.actualizar_historial()
-                self.aplicar_filtros()
-                self.status.showMessage(f"📥 Importado desde {file_path}", 5000)
-            except Exception as e:
-                self.status.showMessage(f"❌ Error al importar: {e}", 5000)
+            # después de aceptar, recargar
+            self.actualizar_tabla()
+            self.actualizar_historial()
+            self.aplicar_filtros()
+            self.status.showMessage("✅ Producto agregado/actualizado", 4000)
 
     def editar_producto(self):
         fila = self.table.currentRow()
         if fila < 0:
-            self.status.showMessage("⚠ Selecciona un producto para editar", 5000)
+            self.status.showMessage("⚠ Seleccioná un producto para editar", 4000)
             return
-
-        id_ = int(self.table.item(fila, 0).text())
-        datos = {
-            "codigo": self.table.item(fila, 1).text(),
-            "nombre": self.table.item(fila, 2).text(),
-            "cantidad": self.table.item(fila, 3).text(),
-            "precio": self.table.item(fila, 4).text()
-        }
-
-        dialog = FormularioProducto(self, datos)
+        prod = (
+            int(self.table.item(fila,0).text()),   # id
+            self.table.item(fila,1).text(),        # codigo
+            self.table.item(fila,2).text(),        # nombre
+            int(self.table.item(fila,3).text()),   # cantidad
+            float(self.table.item(fila,4).text()) if self.table.item(fila,4).text() else 0.0,  # costo
+            self.table.item(fila,5).text(),        # sector (nombre)
+            float(self.table.item(fila,6).text()) if self.table.item(fila,6).text() else 0.0,  # precio
+            self.table.item(fila,7).text() if self.table.item(fila,7) else "",               # codigo_barras
+            self.table.item(fila,8).text() if self.table.item(fila,8) else ""                # movimientos
+        )
+        dialog = FormularioProducto(self, producto=prod)
         if dialog.exec():
-            d = dialog.obtener_datos()
-            try:
-                database.editar_producto(
-                    id_,
-                    d["nombre"],
-                    int(d["cantidad"]),
-                    float(d["precio"])
-                )
-                self.actualizar_tabla()
-                self.actualizar_historial()
-                self.aplicar_filtros()
-                self.status.showMessage(f"✏️ Editado: {d['nombre']}", 5000)
-            except ValueError:
-                self.status.showMessage("⚠ Error: cantidad y precio deben ser números", 5000)
+            self.actualizar_tabla()
+            self.actualizar_historial()
+            self.aplicar_filtros()
+            self.status.showMessage("✏️ Producto editado", 4000)
 
     def eliminar_producto(self):
         fila = self.table.currentRow()
         if fila < 0:
-            self.status.showMessage("⚠ Selecciona un producto para eliminar", 5000)
+            self.status.showMessage("⚠ Seleccioná un producto para eliminar", 4000)
             return
-
-        nombre = self.table.item(fila, 2).text()
-        confirm = QMessageBox.question(self, "Confirmar eliminación",
-                                       f"¿Eliminar producto '{nombre}'?")
+        nombre = self.table.item(fila,2).text()
+        confirm = QMessageBox.question(self, "Confirmar", f"¿Eliminar {nombre}?")
         if confirm == QMessageBox.Yes:
-            id_ = int(self.table.item(fila, 0).text())
-            database.eliminar_producto(id_)
+            pid = int(self.table.item(fila,0).text())
+            database.eliminar_producto(pid)
             self.actualizar_tabla()
             self.actualizar_historial()
             self.aplicar_filtros()
-            self.status.showMessage(f"❌ Eliminado: {nombre}", 5000)
+            self.status.showMessage("❌ Producto eliminado", 4000)
 
+    # -------------------------
+    # Vender (versión simple / ticket)
+    # -------------------------
     def vender_producto(self):
         fila = self.table.currentRow()
         if fila < 0:
-            self.status.showMessage("⚠ Selecciona un producto para vender", 5000)
+            self.status.showMessage("⚠ Seleccioná un producto para vender", 4000)
             return
 
         producto = {
@@ -296,15 +239,15 @@ class MainWindow(QMainWindow):
             "codigo": self.table.item(fila, 1).text(),
             "nombre": self.table.item(fila, 2).text(),
             "stock": int(self.table.item(fila, 3).text()),
-            "precio": float(self.table.item(fila, 4).text())
+            "precio": float(self.table.item(fila, 6).text())
         }
 
-        from ui_vender import FormularioVenta
         dialog = FormularioVenta(producto, self)
         if dialog.exec():
             cantidad = dialog.obtener_cantidad()
+            recibido = dialog.obtener_recibido()
             if cantidad > producto["stock"]:
-                self.status.showMessage("❌ Stock insuficiente", 5000)
+                self.status.showMessage("❌ Stock insuficiente", 4000)
                 return
             ok = database.modificar_stock(producto["id"], -cantidad)
             if ok:
@@ -312,25 +255,110 @@ class MainWindow(QMainWindow):
                 self.actualizar_historial()
                 self.aplicar_filtros()
                 total = cantidad * producto["precio"]
+                self.status.showMessage(f"🛒 Vendidas {cantidad} de {producto['nombre']} | Total: ${total:,.2f}", 8000)
+                self.historial.append(f"💵 Venta: {cantidad} x {producto['nombre']} = ${total:,.2f}")
+                # si ingresó efectivo, mostrar vuelto
+                if recibido is not None:
+                    vuelto = recibido - total
+                    self.status.showMessage(f"💵 Recibido: ${recibido:,.2f} | Vuelto: ${vuelto:,.2f}", 8000)
 
-                # Mostrar en barra de estado
-                self.status.showMessage(
-                    f"🛒 Vendidas {cantidad} de {producto['nombre']} | Total: ${total:,.2f}", 8000
-                )
+    # -------------------------
+    # Importar / Exportar Excel
+    # -------------------------
+    def exportar_excel(self):
+        productos = database.obtener_productos()
+        df = pd.DataFrame(productos, columns=[
+            "ID", "Código", "Nombre", "Cantidad", "Costo", "Sector", "Precio", "Código Barras", "Movimientos"
+        ])
+        ruta, _ = QFileDialog.getSaveFileName(self, "Guardar Excel", "stock_exportado.xlsx", "Excel Files (*.xlsx)")
+        if not ruta:
+            return
+        with pd.ExcelWriter(ruta, engine="xlsxwriter") as writer:
+            df.to_excel(writer, sheet_name="Stock", index=False)
+            worksheet = writer.sheets["Stock"]
+            for i, col in enumerate(df.columns):
+                max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
+                worksheet.set_column(i, i, max_len)
+        self.status.showMessage(f"✅ Exportado a {ruta}", 4000)
 
-                # Registrar también en historial lateral con el importe total
-                self.historial.append(
-                    f"💵 Venta: {cantidad} x {producto['nombre']} = ${total:,.2f}"
-                )
+    def importar_excel(self):
+        ruta, _ = QFileDialog.getOpenFileName(self, "Seleccionar Excel", "", "Excel Files (*.xlsx)")
+        if not ruta:
+            return
+        try:
+            df = pd.read_excel(ruta)
+            cols = [c.strip().lower() for c in df.columns]
 
+            # detectar nombres posibles
+            code_col = None
+            for opt in ["codigo", "código", "code"]:
+                if opt in cols:
+                    code_col = df.columns[cols.index(opt)]
+                    break
+            name_col = None
+            for opt in ["nombre", "name"]:
+                if opt in cols:
+                    name_col = df.columns[cols.index(opt)]
+                    break
+            qty_col = None
+            for opt in ["cantidad", "qty", "quantity"]:
+                if opt in cols:
+                    qty_col = df.columns[cols.index(opt)]
+                    break
 
-    # -----------------------------
-    #   Reportes
-    # -----------------------------
+            # campos opcionales
+            costo_col = None
+            sector_col = None
+            barras_col = None
+            for i, c in enumerate(cols):
+                if c in ("costo", "cost"):
+                    costo_col = df.columns[i]
+                if c == "sector":
+                    sector_col = df.columns[i]
+                if c in ("codigo barras", "codigo_barras", "codigo de barras", "barcode"):
+                    barras_col = df.columns[i]
+
+            if not (code_col and name_col and qty_col):
+                QMessageBox.warning(self, "Columnas faltantes", "El Excel debe contener al menos: Código, Nombre y Cantidad.")
+                return
+
+            # cargar sectores actuales
+            sectores = database.obtener_sectores()
+            sector_map = {s[1]: s[0] for s in sectores}
+
+            # procesar filas
+            for _, row in df.iterrows():
+                codigo = str(row[code_col]).strip()
+                nombre = str(row[name_col]).strip()
+                cantidad = int(row[qty_col]) if not pd.isna(row[qty_col]) else 0
+                costo = float(row[costo_col]) if (costo_col and not pd.isna(row[costo_col])) else 0.0
+                sector_nombre = str(row[sector_col]).strip() if (sector_col and not pd.isna(row[sector_col])) else "Almacen"
+                codigo_barras = str(row[barras_col]).strip() if (barras_col and not pd.isna(row[barras_col])) else ""
+
+                # crear sector si no existe (margen por defecto 30%)
+                if sector_nombre not in sector_map:
+                    database.agregar_sector(sector_nombre, 0.30)
+                    sectores = database.obtener_sectores()
+                    sector_map = {s[1]: s[0] for s in sectores}
+
+                sector_id = sector_map.get(sector_nombre)
+                # usar agregar_o_actualizar para compatibilidad
+                database.agregar_o_actualizar_producto(codigo, nombre, cantidad, costo, sector_id, codigo_barras)
+
+            self.actualizar_tabla()
+            self.actualizar_historial()
+            self.status.showMessage("📥 Importación finalizada", 4000)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo importar: {e}")
+
+    # -------------------------
+    # Reportes simples
+    # -------------------------
     def generar_reporte_ventas(self):
         dlg = QDialog(self)
         dlg.setWindowTitle("Generar reporte de ventas")
-        vbox = QVBoxLayout()
+        vbox = QVBoxLayout(dlg)
         vbox.addWidget(QLabel("Desde:"))
         date_ini = QDateEdit(QDate.currentDate().addDays(-7))
         date_ini.setCalendarPopup(True)
@@ -344,29 +372,41 @@ class MainWindow(QMainWindow):
         cancel = QPushButton("❌ Cancelar")
         btns.addWidget(ok); btns.addWidget(cancel)
         vbox.addLayout(btns)
-        dlg.setLayout(vbox)
         ok.clicked.connect(dlg.accept)
         cancel.clicked.connect(dlg.reject)
-
         if dlg.exec():
             fi = date_ini.date().toString("yyyy-MM-dd")
             ff = date_fin.date().toString("yyyy-MM-dd")
             ventas = database.obtener_ventas(fi, ff)
             if not ventas:
-                self.status.showMessage("ℹ️ No se encontraron ventas en el rango", 5000)
+                self.status.showMessage("ℹ️ No se encontraron ventas", 4000)
                 return
             df = pd.DataFrame(ventas, columns=["Código", "Nombre", "Cantidad", "Precio", "Fecha"])
-            total_unidades = sum(abs(v[2]) for v in ventas)
-            total_dinero = sum(abs(v[2]) * v[3] for v in ventas)
+            total_unidades = sum(abs(int(v[2])) for v in ventas)
+            total_dinero = sum(abs(int(v[2])) * float(v[3]) for v in ventas)
             df.loc[len(df.index)] = ["", "TOTAL", total_unidades, total_dinero, ""]
-            df.to_excel("reporte_ventas.xlsx", index=False)
-            self.status.showMessage(f"📊 Reporte generado: reporte_ventas.xlsx ({fi} → {ff})", 5000)
+            ruta, _ = QFileDialog.getSaveFileName(self, "Guardar reporte", "reporte_ventas.xlsx", "Excel Files (*.xlsx)")
+            if ruta:
+                with pd.ExcelWriter(ruta, engine="xlsxwriter") as writer:
+                    df.to_excel(writer, sheet_name="Ventas", index=False)
+                    ws = writer.sheets["Ventas"]
+                    for i, col in enumerate(df.columns):
+                        max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
+                        ws.set_column(i, i, max_len)
+                self.status.showMessage(f"📊 Reporte guardado en {ruta}", 5000)
 
     def imprimir_bajo_stock(self):
         productos = [p for p in self._productos_cache if int(p[3]) <= 5]
         if not productos:
-            self.status.showMessage("ℹ️ No hay productos con bajo stock", 5000)
+            self.status.showMessage("ℹ️ No hay productos con bajo stock", 4000)
             return
-        df = pd.DataFrame(productos, columns=["ID", "Código", "Nombre", "Cantidad", "Precio", "Movimientos"])
-        df.to_excel("bajo_stock.xlsx", index=False)
-        self.status.showMessage("🖨 Listado bajo stock generado: bajo_stock.xlsx", 5000)
+        df = pd.DataFrame(productos, columns=["ID", "Código", "Nombre", "Cantidad", "Costo", "Sector", "Precio", "Código Barras", "Movimientos"])
+        ruta, _ = QFileDialog.getSaveFileName(self, "Guardar bajo stock", "bajo_stock.xlsx", "Excel Files (*.xlsx)")
+        if ruta:
+            with pd.ExcelWriter(ruta, engine="xlsxwriter") as writer:
+                df.to_excel(writer, sheet_name="BajoStock", index=False)
+                ws = writer.sheets["BajoStock"]
+                for i, col in enumerate(df.columns):
+                    max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
+                    ws.set_column(i, i, max_len)
+            self.status.showMessage(f"🖨 Guardado: {ruta}", 4000)
