@@ -11,7 +11,7 @@ class FormularioProducto(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Formulario de Producto")
         self.resize(420, 380)
-        self.producto = producto  # si viene: tupla desde db (id, codigo, nombre, cantidad, costo, sector, precio, codigo_barras, movimientos)
+        self.producto = producto
 
         layout = QVBoxLayout()
 
@@ -78,7 +78,6 @@ class FormularioProducto(QDialog):
             self.input_cantidad.setValue(int(self.producto[3]))
             self.input_costo.setText(str(self.producto[4] if self.producto[4] is not None else "0"))
             if self.producto[5]:
-                # buscar sector por nombre
                 idx = self.combo_sector.findText(self.producto[5])
                 if idx >= 0:
                     self.combo_sector.setCurrentIndex(idx)
@@ -89,7 +88,6 @@ class FormularioProducto(QDialog):
         self.combo_sector.clear()
         sectores = database.obtener_sectores()
         for s in sectores:
-            # s = (id, nombre, margen)
             self.combo_sector.addItem(f"{s[1]} ({int(s[2]*100)}%)", s[0])
 
     def _actualizar_precio(self):

@@ -9,13 +9,15 @@ from PySide6.QtCore import Qt, QDate
 import pandas as pd
 import database
 from ui_formulario import FormularioProducto
-from ui_vender import FormularioVenta
+from ui_vender import FormularioPOS
+from datetime import datetime
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Gestor de Stock - Almacén")
-        self.resize(1100, 600)
+        self.setWindowTitle("Gestor de Stock - Almacén (Fase 2)")
+        self.resize(1200, 650)
 
         # toolbar
         toolbar = QToolBar("Principal")
@@ -26,15 +28,16 @@ class MainWindow(QMainWindow):
         self.act_agregar = QAction("➕ Agregar (F1)", self)
         self.act_editar = QAction("✏️ Editar (F3)", self)
         self.act_eliminar = QAction("🗑 Eliminar (Del)", self)
-        self.act_vender = QAction("🛒 Vender (F2)", self)
+        self.act_vender = QAction("🛒 Registrar Venta (F2)", self)
         self.act_importar = QAction("📥 Importar Excel", self)
         self.act_exportar = QAction("📤 Exportar Stock", self)
         self.act_reporte = QAction("📊 Reporte ventas", self)
         self.act_bajo_stock = QAction("🖨 Bajo stock", self)
+        self.act_reembolsos = QAction("↩️ Reembolsos", self)
 
         for act in [self.act_agregar, self.act_editar, self.act_eliminar,
                     self.act_vender, self.act_importar, self.act_exportar,
-                    self.act_reporte, self.act_bajo_stock]:
+                    self.act_reporte, self.act_bajo_stock, self.act_reembolsos]:
             toolbar.addAction(act)
 
         # central widget
@@ -60,7 +63,7 @@ class MainWindow(QMainWindow):
 
         # right panel - historial
         right_layout = QVBoxLayout()
-        right_layout.addWidget(QLabel("📜 Historial"))
+        right_layout.addWidget(QLabel("📜 Historial (últimos movimientos)"))
         self.historial = QTextEdit()
         self.historial.setReadOnly(True)
         right_layout.addWidget(self.historial)
@@ -73,7 +76,7 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.status)
         self.status.showMessage("✅ Aplicación iniciada")
 
-        # inicializar cache
+        # inicializar
         self._productos_cache = []
         self.actualizar_tabla()
         self.actualizar_historial()
@@ -82,11 +85,12 @@ class MainWindow(QMainWindow):
         self.act_agregar.triggered.connect(self.abrir_formulario)
         self.act_editar.triggered.connect(self.editar_producto)
         self.act_eliminar.triggered.connect(self.eliminar_producto)
-        self.act_vender.triggered.connect(self.vender_producto)
+        self.act_vender.triggered.connect(self.abrir_pos)
         self.act_importar.triggered.connect(self.importar_excel)
         self.act_exportar.triggered.connect(self.exportar_excel)
         self.act_reporte.triggered.connect(self.generar_reporte_ventas)
         self.act_bajo_stock.triggered.connect(self.imprimir_bajo_stock)
+        self.act_reembolsos.triggered.connect(self.abrir_reembolsos)
 
         self.input_buscar.textChanged.connect(self.aplicar_filtros)
         self.chk_bajo_stock.toggled.connect(self.aplicar_filtros)
@@ -98,7 +102,7 @@ class MainWindow(QMainWindow):
         self.act_eliminar.setShortcut(QKeySequence("Delete"))
 
     # -------------------------
-    # carga de productos / tabla
+    # tabla productos
     # -------------------------
     def _cargar_productos(self):
         self._productos_cache = database.obtener_productos()
@@ -109,7 +113,6 @@ class MainWindow(QMainWindow):
         self._pintar_tabla(productos)
 
     def _pintar_tabla(self, productos):
-        # columnas: id, codigo, nombre, cantidad, costo, sector, precio, codigo_barras, movimientos
         headers = ["ID", "Código", "Nombre", "Cantidad", "Costo", "Sector", "Precio", "Código Barras", "Movs"]
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
@@ -118,7 +121,7 @@ class MainWindow(QMainWindow):
         for r, prod in enumerate(productos):
             for c, val in enumerate(prod):
                 item = QTableWidgetItem(str(val))
-                if c == 3:  # cantidad
+                if c == 3:
                     try:
                         cant = int(val)
                         if cant <= 5:
@@ -129,7 +132,6 @@ class MainWindow(QMainWindow):
                         pass
                 self.table.setItem(r, c, item)
         self.table.resizeColumnsToContents()
-        # ordenar por nombre (col 2)
         try:
             self.table.sortItems(2)
         except:
@@ -158,7 +160,7 @@ class MainWindow(QMainWindow):
     # historial
     # -------------------------
     def actualizar_historial(self):
-        movs = database.obtener_movimientos(200)
+        movs = database.obtener_movimientos(300)
         self.historial.clear()
         for mid, nombre, tipo, cambio, precio_unit, fecha, detalles in movs:
             etiqueta = tipo
@@ -181,7 +183,6 @@ class MainWindow(QMainWindow):
     def abrir_formulario(self):
         dialog = FormularioProducto(self)
         if dialog.exec():
-            # después de aceptar, recargar
             self.actualizar_tabla()
             self.actualizar_historial()
             self.aplicar_filtros()
@@ -226,41 +227,16 @@ class MainWindow(QMainWindow):
             self.status.showMessage("❌ Producto eliminado", 4000)
 
     # -------------------------
-    # Vender (versión simple / ticket)
+    # POS / ventas
     # -------------------------
-    def vender_producto(self):
-        fila = self.table.currentRow()
-        if fila < 0:
-            self.status.showMessage("⚠ Seleccioná un producto para vender", 4000)
-            return
-
-        producto = {
-            "id": int(self.table.item(fila, 0).text()),
-            "codigo": self.table.item(fila, 1).text(),
-            "nombre": self.table.item(fila, 2).text(),
-            "stock": int(self.table.item(fila, 3).text()),
-            "precio": float(self.table.item(fila, 6).text())
-        }
-
-        dialog = FormularioVenta(producto, self)
+    def abrir_pos(self):
+        dialog = FormularioPOS(self)
         if dialog.exec():
-            cantidad = dialog.obtener_cantidad()
-            recibido = dialog.obtener_recibido()
-            if cantidad > producto["stock"]:
-                self.status.showMessage("❌ Stock insuficiente", 4000)
-                return
-            ok = database.modificar_stock(producto["id"], -cantidad)
-            if ok:
-                self.actualizar_tabla()
-                self.actualizar_historial()
-                self.aplicar_filtros()
-                total = cantidad * producto["precio"]
-                self.status.showMessage(f"🛒 Vendidas {cantidad} de {producto['nombre']} | Total: ${total:,.2f}", 8000)
-                self.historial.append(f"💵 Venta: {cantidad} x {producto['nombre']} = ${total:,.2f}")
-                # si ingresó efectivo, mostrar vuelto
-                if recibido is not None:
-                    vuelto = recibido - total
-                    self.status.showMessage(f"💵 Recibido: ${recibido:,.2f} | Vuelto: ${vuelto:,.2f}", 8000)
+            # recargar todo
+            self.actualizar_tabla()
+            self.actualizar_historial()
+            self.aplicar_filtros()
+            self.status.showMessage("🛒 Venta registrada", 5000)
 
     # -------------------------
     # Importar / Exportar Excel
@@ -335,14 +311,12 @@ class MainWindow(QMainWindow):
                 sector_nombre = str(row[sector_col]).strip() if (sector_col and not pd.isna(row[sector_col])) else "Almacen"
                 codigo_barras = str(row[barras_col]).strip() if (barras_col and not pd.isna(row[barras_col])) else ""
 
-                # crear sector si no existe (margen por defecto 30%)
                 if sector_nombre not in sector_map:
                     database.agregar_sector(sector_nombre, 0.30)
                     sectores = database.obtener_sectores()
                     sector_map = {s[1]: s[0] for s in sectores}
 
                 sector_id = sector_map.get(sector_nombre)
-                # usar agregar_o_actualizar para compatibilidad
                 database.agregar_o_actualizar_producto(codigo, nombre, cantidad, costo, sector_id, codigo_barras)
 
             self.actualizar_tabla()
@@ -353,14 +327,14 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"No se pudo importar: {e}")
 
     # -------------------------
-    # Reportes simples
+    # Reportes - ventas agrupadas por tipo de pago
     # -------------------------
     def generar_reporte_ventas(self):
         dlg = QDialog(self)
         dlg.setWindowTitle("Generar reporte de ventas")
         vbox = QVBoxLayout(dlg)
         vbox.addWidget(QLabel("Desde:"))
-        date_ini = QDateEdit(QDate.currentDate().addDays(-7))
+        date_ini = QDateEdit(QDate.currentDate().addDays(-30))
         date_ini.setCalendarPopup(True)
         vbox.addWidget(date_ini)
         vbox.addWidget(QLabel("Hasta:"))
@@ -374,26 +348,123 @@ class MainWindow(QMainWindow):
         vbox.addLayout(btns)
         ok.clicked.connect(dlg.accept)
         cancel.clicked.connect(dlg.reject)
+
         if dlg.exec():
             fi = date_ini.date().toString("yyyy-MM-dd")
             ff = date_fin.date().toString("yyyy-MM-dd")
-            ventas = database.obtener_ventas(fi, ff)
+            ventas = database.obtener_ventas_con_detalles()
+            ventas = [v for v in ventas if fi <= v["fecha"][:10] <= ff]
+
             if not ventas:
-                self.status.showMessage("ℹ️ No se encontraron ventas", 4000)
+                self.status.showMessage("ℹ️ No se encontraron ventas en el rango", 4000)
                 return
-            df = pd.DataFrame(ventas, columns=["Código", "Nombre", "Cantidad", "Precio", "Fecha"])
-            total_unidades = sum(abs(int(v[2])) for v in ventas)
-            total_dinero = sum(abs(int(v[2])) * float(v[3]) for v in ventas)
-            df.loc[len(df.index)] = ["", "TOTAL", total_unidades, total_dinero, ""]
+
+            # ordenar por tipo de pago
+            ventas.sort(key=lambda v: v["tipo_pago"])
             ruta, _ = QFileDialog.getSaveFileName(self, "Guardar reporte", "reporte_ventas.xlsx", "Excel Files (*.xlsx)")
-            if ruta:
-                with pd.ExcelWriter(ruta, engine="xlsxwriter") as writer:
-                    df.to_excel(writer, sheet_name="Ventas", index=False)
-                    ws = writer.sheets["Ventas"]
-                    for i, col in enumerate(df.columns):
-                        max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
-                        ws.set_column(i, i, max_len)
-                self.status.showMessage(f"📊 Reporte guardado en {ruta}", 5000)
+            if not ruta:
+                return
+
+            import pandas as pd
+            with pd.ExcelWriter(ruta, engine="xlsxwriter") as writer:
+                wb = writer.book
+                ws = wb.add_worksheet("Ventas")
+                writer.sheets["Ventas"] = ws
+
+                bold = wb.add_format({"bold": True})
+                money = wb.add_format({"num_format": "$#,##0.00"})
+
+                row = 0
+                total_general = 0
+
+                # para ajustar columnas dinámicamente
+                max_lens = [0, 0, 0, 0, 0]
+
+                for tipo in sorted(set(v["tipo_pago"] for v in ventas)):
+                    ws.write(row, 0, f"Tipo de pago: {tipo}", bold)
+                    row += 1
+                    headers = ["Fecha/Hora", "Producto", "Cantidad", "Precio Unitario", "Subtotal"]
+                    ws.write_row(row, 0, headers, bold)
+                    # actualizar largo inicial
+                    for i, h in enumerate(headers):
+                        max_lens[i] = max(max_lens[i], len(str(h)))
+                    row += 1
+
+                    total_tipo = 0
+                    for v in [x for x in ventas if x["tipo_pago"] == tipo]:
+                        for item in v["items"]:
+                            values = [v["fecha"], item["nombre"], item["cantidad"], item["precio"], item["subtotal"]]
+                            for i, val in enumerate(values):
+                                txt = str(val)
+                                max_lens[i] = max(max_lens[i], len(txt))
+                            ws.write(row, 0, v["fecha"])
+                            ws.write(row, 1, item["nombre"])
+                            ws.write(row, 2, item["cantidad"])
+                            ws.write_number(row, 3, item["precio"], money)
+                            ws.write_number(row, 4, item["subtotal"], money)
+                            total_tipo += item["subtotal"]
+                            row += 1
+
+                    ws.write(row, 3, "TOTAL " + tipo, bold)
+                    ws.write_number(row, 4, total_tipo, money)
+                    row += 2
+                    total_general += total_tipo
+
+                ws.write(row, 3, "TOTAL GENERAL", bold)
+                ws.write_number(row, 4, total_general, money)
+
+                # ajustar ancho de columnas según el máximo
+                for i, width in enumerate(max_lens):
+                    ws.set_column(i, i, width + 2)  # un poquito de margen
+
+            self.status.showMessage(f"📊 Reporte guardado en {ruta}", 5000)
+
+
+    # -------------------------
+    # Reembolsos
+    # -------------------------
+    def abrir_reembolsos(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Reembolsos - Seleccionar venta")
+        vbox = QVBoxLayout(dlg)
+        vbox.addWidget(QLabel("Listado de ventas recientes:"))
+        table = QTableWidget()
+        table.setColumnCount(5)
+        table.setHorizontalHeaderLabels(["ID", "Fecha", "TipoPago", "Estado", "Total"])
+        ventas = database.obtener_ventas()
+        table.setRowCount(len(ventas))
+        for r, v in enumerate(ventas):
+            table.setItem(r,0, QTableWidgetItem(str(v[0])))
+            table.setItem(r,1, QTableWidgetItem(str(v[1])))
+            table.setItem(r,2, QTableWidgetItem(str(v[2])))
+            table.setItem(r,3, QTableWidgetItem(str(v[3])))
+            table.setItem(r,4, QTableWidgetItem(str(v[4])))
+        vbox.addWidget(table)
+        btns = QHBoxLayout()
+        btn_reemb = QPushButton("↩️ Reembolsar venta seleccionada")
+        btn_cancel = QPushButton("Cerrar")
+        btns.addWidget(btn_reemb); btns.addWidget(btn_cancel)
+        vbox.addLayout(btns)
+        dlg.setLayout(vbox)
+
+        def on_reembolsar():
+            r = table.currentRow()
+            if r < 0:
+                QMessageBox.warning(self, "Seleccionar", "Seleccioná una venta")
+                return
+            venta_id = int(table.item(r,0).text())
+            ok, msg = database.reembolsar_venta(venta_id)
+            if ok:
+                QMessageBox.information(self, "Reembolso", msg)
+                self.actualizar_tabla()
+                self.actualizar_historial()
+                dlg.accept()
+            else:
+                QMessageBox.critical(self, "Error", msg)
+
+        btn_reemb.clicked.connect(on_reembolsar)
+        btn_cancel.clicked.connect(dlg.reject)
+        dlg.exec()
 
     def imprimir_bajo_stock(self):
         productos = [p for p in self._productos_cache if int(p[3]) <= 5]
@@ -410,3 +481,4 @@ class MainWindow(QMainWindow):
                     max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
                     ws.set_column(i, i, max_len)
             self.status.showMessage(f"🖨 Guardado: {ruta}", 4000)
+

@@ -39,7 +39,7 @@ def inicializar_db():
     )
     """)
 
-    # Tabla movimientos (historial detallado)
+    # Tabla movimientos (historial)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS movimientos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,35 +53,35 @@ def inicializar_db():
     )
     """)
 
-    # Tabla ventas (para fases siguientes / compatibilidad)
+    # Tabla ventas
     cur.execute("""
     CREATE TABLE IF NOT EXISTS ventas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         fecha TEXT NOT NULL,
-        tipo_pago TEXT,
-        estado TEXT,
-        total REAL,
+        tipo_pago TEXT NOT NULL,    -- 'Efectivo','Transferencia','QR','Pendiente'
+        estado TEXT NOT NULL,       -- 'PAGADO','PENDIENTE','REEMBOLSADO'
+        total REAL NOT NULL,
         efectivo_recibido REAL,
         vuelto REAL,
         cliente TEXT
     )
     """)
 
-    # Tabla venta_items (para fases siguientes)
+    # Tabla items de venta
     cur.execute("""
     CREATE TABLE IF NOT EXISTS venta_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        venta_id INTEGER,
-        producto_id INTEGER,
-        cantidad INTEGER,
-        precio_unitario REAL,
-        subtotal REAL,
+        venta_id INTEGER NOT NULL,
+        producto_id INTEGER NOT NULL,
+        cantidad INTEGER NOT NULL,
+        precio_unitario REAL NOT NULL,
+        subtotal REAL NOT NULL,
         FOREIGN KEY(venta_id) REFERENCES ventas(id),
         FOREIGN KEY(producto_id) REFERENCES productos(id)
     )
     """)
 
-    # Semillas de sectores por defecto
+    # Semillas sectores
     default = [
         ("Fiambreria", 0.60),
         ("Panaderia", 0.40),
@@ -134,16 +134,16 @@ def eliminar_sector(id_sector):
 
 def obtener_margen_sector(id_sector):
     if id_sector is None:
-        return 0
+        return 0.0
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("SELECT margen FROM sectores WHERE id=?", (id_sector,))
     row = cur.fetchone()
     conn.close()
-    return row[0] if row else 0
+    return row[0] if row else 0.0
 
 # -----------------------------
-# MOVIMIENTOS (historial)
+# MOVIMIENTOS
 # -----------------------------
 def agregar_movimiento(producto_id, tipo, cambio, precio_unitario, detalles=""):
     conn = get_connection()
@@ -173,9 +173,8 @@ def obtener_movimientos(limit=100):
 # PRODUCTOS
 # -----------------------------
 def agregar_producto(codigo, nombre, cantidad, costo, sector_id, codigo_barras):
-    # calcula precio según margen del sector
     margen = obtener_margen_sector(sector_id)
-    precio = round(costo + (costo * margen), 2) if costo is not None else 0.0
+    precio = round((costo or 0.0) + ((costo or 0.0) * (margen or 0.0)), 2)
 
     conn = get_connection()
     cur = conn.cursor()
@@ -187,15 +186,10 @@ def agregar_producto(codigo, nombre, cantidad, costo, sector_id, codigo_barras):
     conn.commit()
     conn.close()
 
-    # registrar movimiento de ingreso
     agregar_movimiento(producto_id, "INGRESO", cantidad, precio, detalles="Alta/Ingreso inicial")
     return producto_id
 
 def agregar_o_actualizar_producto(codigo, nombre, cantidad, costo, sector_id=None, codigo_barras=""):
-    """
-    Compatibilidad: si existe un producto con el mismo codigo -> suma cantidad (ingreso).
-    Si no existe -> crea nuevo producto. Calcula precio por sector.
-    """
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("SELECT id, cantidad, costo, sector_id FROM productos WHERE codigo = ?", (codigo,))
@@ -204,10 +198,8 @@ def agregar_o_actualizar_producto(codigo, nombre, cantidad, costo, sector_id=Non
     if row:
         producto_id = row[0]
         new_cant = (row[1] or 0) + cantidad
-        # si se pasa costo/sector, actualizarlos; si no, mantener
         costo_final = costo if costo is not None else (row[2] or 0)
         sector_final = sector_id if sector_id is not None else row[3]
-
         margen = obtener_margen_sector(sector_final)
         precio = round(costo_final + (costo_final * margen), 2) if costo_final is not None else 0.0
 
@@ -224,7 +216,7 @@ def agregar_o_actualizar_producto(codigo, nombre, cantidad, costo, sector_id=Non
 
 def editar_producto(id_producto, codigo, nombre, cantidad, costo, sector_id, codigo_barras):
     margen = obtener_margen_sector(sector_id)
-    precio = round(costo + (costo * margen), 2) if costo is not None else 0.0
+    precio = round((costo or 0.0) + ((costo or 0.0) * (margen or 0.0)), 2)
 
     conn = get_connection()
     cur = conn.cursor()
@@ -239,7 +231,6 @@ def editar_producto(id_producto, codigo, nombre, cantidad, costo, sector_id, cod
     agregar_movimiento(id_producto, "EDIT", 0, precio, detalles="Edición de producto")
 
 def eliminar_producto(id_producto):
-    # obtener datos antes de eliminar para movimiento
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("SELECT nombre, precio FROM productos WHERE id=?", (id_producto,))
@@ -266,50 +257,246 @@ def obtener_productos():
     return data
 
 # -----------------------------
-# STOCK / VENTAS (compatibilidad)
+# STOCK / VENTAS (Fase 2)
 # -----------------------------
-def modificar_stock(producto_id, cantidad_cambio, descripcion=""):
+def modificar_stock(producto_id, cantidad_cambio, detalles=""):
     conn = get_connection()
-    cursor = conn.cursor()
-
-    # Obtener datos actuales del producto (cantidad, nombre y precio)
-    cursor.execute("SELECT cantidad, nombre, precio FROM productos WHERE id=?", (producto_id,))
-    prod = cursor.fetchone()
+    cur = conn.cursor()
+    cur.execute("SELECT cantidad, precio FROM productos WHERE id=?", (producto_id,))
+    prod = cur.fetchone()
     if not prod:
         conn.close()
         return False
 
-    nueva_cantidad = prod[0] + cantidad_cambio
-    if nueva_cantidad < 0:
+    nueva = (prod[0] or 0) + cantidad_cambio
+    if nueva < 0:
         conn.close()
-        return False  # no puede quedar negativo
+        return False
 
-    # Actualizar cantidad en productos
-    cursor.execute("UPDATE productos SET cantidad=? WHERE id=?", (nueva_cantidad, producto_id))
+    cur.execute("UPDATE productos SET cantidad=? WHERE id=?", (nueva, producto_id))
     conn.commit()
     conn.close()
 
-    # Registrar movimiento usando la función ya existente
-    agregar_movimiento(
-        producto_id=producto_id,
-        tipo="VENTA" if cantidad_cambio < 0 else "INGRESO",
-        cambio=cantidad_cambio,
-        precio_unitario=prod[2] if prod[2] is not None else 0.0,
-        detalles=descripcion if descripcion else f"Cambio de stock: {cantidad_cambio}"
-    )
-
+    # registrar movimiento (tipo VENTA si cambio <0, INGRESO si >0)
+    tipo = "VENTA" if cantidad_cambio < 0 else "INGRESO"
+    agregar_movimiento(producto_id, tipo, cantidad_cambio, prod[1] or 0.0, detalles=detalles)
     return True
 
-def obtener_ventas(fecha_inicio, fecha_fin):
+# -----------------------------
+# VENTAS (Fase 2)
+# -----------------------------
+def registrar_venta(items, tipo_pago, cliente=None, efectivo_recibido=None):
+    """
+    items: list of dicts: {"producto_id": id, "cantidad": n, "precio_unitario": p}
+    tipo_pago: 'Efectivo'|'Transferencia'|'QR'|'Pendiente'
+    Si tipo_pago == 'Pendiente', la venta se guarda como estado 'PENDIENTE' y total no suma a caja (esto lo manejamos en reportes)
+    Esta función decrementa stock (si es posible) y registra venta + items + movimientos en transacción.
+    Devuelve (True, venta_id) o (False, mensaje)
+    """
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("""
-        SELECT p.codigo, p.nombre, m.cambio, m.precio_unitario, m.fecha
-        FROM movimientos m
-        JOIN productos p ON p.id = m.producto_id
-        WHERE m.tipo = 'VENTA' AND date(m.fecha) BETWEEN date(?) AND date(?)
-        ORDER BY m.fecha ASC
-    """, (fecha_inicio, fecha_fin))
+    try:
+        total = sum(it["cantidad"] * it["precio_unitario"] for it in items)
+        fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        estado = "PAGADO" if tipo_pago != "Pendiente" else "PENDIENTE"
+        vuelto = None
+
+        # Iniciar transacción
+        cur.execute("BEGIN")
+        # crear venta
+        cur.execute("""
+            INSERT INTO ventas (fecha, tipo_pago, estado, total, efectivo_recibido, vuelto, cliente)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (fecha, tipo_pago, estado, total, efectivo_recibido, vuelto, cliente))
+        venta_id = cur.lastrowid
+
+        # procesar items: verificar stock y descontar
+        for it in items:
+            pid = it["producto_id"]
+            cant = it["cantidad"]
+            precio_unit = it["precio_unitario"]
+            subtotal = round(cant * precio_unit, 2)
+
+            # verificar stock actual
+            cur.execute("SELECT cantidad, precio FROM productos WHERE id=?", (pid,))
+            prod = cur.fetchone()
+            if not prod:
+                raise Exception(f"Producto id {pid} no encontrado")
+            current = prod[0] or 0
+            if current - cant < 0:
+                raise Exception(f"Stock insuficiente para {pid}")
+
+            # descontar stock
+            cur.execute("UPDATE productos SET cantidad=? WHERE id=?", (current - cant, pid))
+
+            # insertar item
+            cur.execute("""
+                INSERT INTO venta_items (venta_id, producto_id, cantidad, precio_unitario, subtotal)
+                VALUES (?, ?, ?, ?, ?)
+            """, (venta_id, pid, cant, precio_unit, subtotal))
+
+            # registrar movimiento tipo VENTA (cantidad negativa)
+            cur.execute("INSERT INTO movimientos (producto_id, tipo, cambio, precio_unitario, fecha, detalles) VALUES (?, ?, ?, ?, ?, ?)",
+                        (pid, "VENTA", -cant, precio_unit, fecha, f"Venta ID {venta_id}"))
+
+        conn.commit()
+        conn.close()
+        return True, venta_id
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return False, str(e)
+
+def obtener_ventas(fecha_inicio=None, fecha_fin=None, estado=None):
+    conn = get_connection()
+    cur = conn.cursor()
+    q = """
+        SELECT v.id, v.fecha, v.tipo_pago, v.estado, v.total, v.efectivo_recibido, v.vuelto, v.cliente
+        FROM ventas v
+        WHERE 1=1
+    """
+    params = []
+    if fecha_inicio and fecha_fin:
+        q += " AND date(v.fecha) BETWEEN date(?) AND date(?)"
+        params.extend([fecha_inicio, fecha_fin])
+    if estado:
+        q += " AND v.estado = ?"
+        params.append(estado)
+    q += " ORDER BY v.fecha DESC"
+    cur.execute(q, tuple(params))
     data = cur.fetchall()
     conn.close()
     return data
+
+def obtener_items_venta(venta_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT vi.id, vi.producto_id, p.nombre, vi.cantidad, vi.precio_unitario, vi.subtotal
+        FROM venta_items vi
+        JOIN productos p ON p.id = vi.producto_id
+        WHERE vi.venta_id = ?
+    """, (venta_id,))
+    data = cur.fetchall()
+    conn.close()
+    return data
+
+def marcar_venta_pagada(venta_id, tipo_pago_nuevo=None, recibido=None, vuelto=None):
+    conn = get_connection()
+    cur = conn.cursor()
+    # cambiar estado a PAGADO; si vino como PENDIENTE antes, ahora suma como pagado
+    cur.execute("SELECT estado FROM ventas WHERE id=?", (venta_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return False, "Venta no encontrada"
+    estado_actual = row[0]
+    if estado_actual == "PAGADO":
+        conn.close()
+        return False, "Venta ya está pagada"
+
+    nuevo_tipo = tipo_pago_nuevo if tipo_pago_nuevo else "Efectivo"
+    cur.execute("UPDATE ventas SET estado=?, tipo_pago=?, efectivo_recibido=?, vuelto=? WHERE id=?",
+                ("PAGADO", nuevo_tipo, recibido, vuelto, venta_id))
+    conn.commit()
+    conn.close()
+    return True, "Venta marcada como pagada"
+
+def reembolsar_venta(venta_id, items_to_refund=None):
+    """
+    items_to_refund: None => reembolsar toda la venta (todos los items)
+    otherwise list of venta_item ids to refund partially.
+    Se crea una venta con monto negativo o se insertan movimientos negativos que repongan stock.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, fecha, total FROM ventas WHERE id=?", (venta_id,))
+        venta = cur.fetchone()
+        if not venta:
+            conn.close()
+            return False, "Venta no encontrada"
+
+        # obtener items
+        if items_to_refund is None:
+            cur.execute("SELECT id, producto_id, cantidad, precio_unitario, subtotal FROM venta_items WHERE venta_id=?", (venta_id,))
+            items = cur.fetchall()
+        else:
+            # items_to_refund es lista de venta_items.id
+            placeholders = ",".join("?" for _ in items_to_refund)
+            cur.execute(f"SELECT id, producto_id, cantidad, precio_unitario, subtotal FROM venta_items WHERE id IN ({placeholders})", tuple(items_to_refund))
+            items = cur.fetchall()
+
+        fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # proceso: por cada item repongo stock y creo movimiento REEMBOLSO
+        for itm in items:
+            vi_id, pid, cant, precio_unit, subtotal = itm
+            # reponer stock
+            cur.execute("SELECT cantidad FROM productos WHERE id=?", (pid,))
+            row = cur.fetchone()
+            current = row[0] if row else 0
+            cur.execute("UPDATE productos SET cantidad=? WHERE id=?", (current + cant, pid))
+            # movimiento
+            cur.execute("INSERT INTO movimientos (producto_id, tipo, cambio, precio_unitario, fecha, detalles) VALUES (?, ?, ?, ?, ?, ?)",
+                        (pid, "REEMBOLSO", cant, precio_unit, fecha, f"Reembolso de venta {venta_id}"))
+        # opcional: marcar venta como REEMBOLSO si todo fue devuelto
+        conn.commit()
+        conn.close()
+        return True, "Reembolso procesado"
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return False, str(e)
+
+# -----------------------------
+# Reportes: ventas agrupadas por tipo de pago
+# -----------------------------
+def ventas_resumen_por_tipo(fecha_inicio=None, fecha_fin=None):
+    conn = get_connection()
+    cur = conn.cursor()
+    q = "SELECT tipo_pago, SUM(total) as total, COUNT(*) as cantidad FROM ventas WHERE 1=1"
+    params = []
+    if fecha_inicio and fecha_fin:
+        q += " AND date(fecha) BETWEEN date(?) AND date(?)"
+        params.extend([fecha_inicio, fecha_fin])
+    q += " GROUP BY tipo_pago"
+    cur.execute(q, tuple(params))
+    data = cur.fetchall()
+    conn.close()
+    return data
+
+def obtener_ventas_con_detalles():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM ventas ORDER BY fecha")
+    ventas = cursor.fetchall()
+
+    resultado = []
+    for v in ventas:
+        venta_id = v[0]
+        cursor.execute("""
+            SELECT vi.cantidad, vi.precio_unitario, (vi.cantidad * vi.precio_unitario) as subtotal, p.nombre
+            FROM venta_items vi
+            JOIN productos p ON vi.producto_id = p.id
+            WHERE vi.venta_id=?
+        """, (venta_id,))
+        items = cursor.fetchall()
+
+        resultado.append({
+            "id": v[0],
+            "fecha": v[1],
+            "tipo_pago": v[2],
+            "estado": v[3],
+            "total": v[4],
+            "recibido": v[5],
+            "vuelto": v[6],
+            "items": [
+                {"cantidad": it[0], "precio": it[1], "subtotal": it[2], "nombre": it[3]}
+                for it in items
+            ]
+        })
+
+    conn.close()
+    return resultado
