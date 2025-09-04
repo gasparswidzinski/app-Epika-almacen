@@ -1,9 +1,10 @@
 # ui_vender.py
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QPushButton,
-    QLineEdit, QMessageBox, QComboBox, QTableWidget, QTableWidgetItem, QFileDialog
+    QLineEdit, QMessageBox, QComboBox, QTableWidget, QTableWidgetItem
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence
 import database
 
 class FormularioPOS(QDialog):
@@ -66,8 +67,10 @@ class FormularioPOS(QDialog):
         # Totales y botones
         bottom = QHBoxLayout()
         self.lbl_total = QLabel("Total: $0.00")
+        self.lbl_total.setStyleSheet("font-size: 20px; font-weight: bold; color: black;")
         bottom.addWidget(self.lbl_total)
         self.btn_confirm = QPushButton("✅ Confirmar Venta")
+        self.btn_confirm.setShortcut(QKeySequence("F10"))  # 🔥 Atajo agregado
         bottom.addWidget(self.btn_confirm)
         self.btn_cancel = QPushButton("❌ Cancelar")
         bottom.addWidget(self.btn_cancel)
@@ -89,7 +92,6 @@ class FormularioPOS(QDialog):
         if not q:
             QMessageBox.information(self, "Buscar", "Ingresá código, nombre o barcode")
             return
-        # buscar por codigo exacto o codigo_barras exacto o nombre contains
         productos = database.obtener_productos()
         encontrado = None
         for p in productos:
@@ -102,7 +104,10 @@ class FormularioPOS(QDialog):
                 "id": encontrado[0], "codigo": encontrado[1], "nombre": encontrado[2],
                 "stock": int(encontrado[3]), "precio": float(encontrado[6])
             }
-            QMessageBox.information(self, "Producto encontrado", f"{self._ultimo_producto['nombre']} — Stock: {self._ultimo_producto['stock']} — Precio: ${self._ultimo_producto['precio']}")
+            QMessageBox.information(
+                self, "Producto encontrado",
+                f"{self._ultimo_producto['nombre']} — Stock: {self._ultimo_producto['stock']} — Precio: ${self._ultimo_producto['precio']}"
+            )
         else:
             QMessageBox.information(self, "No encontrado", "No se encontró el producto")
 
@@ -117,7 +122,6 @@ class FormularioPOS(QDialog):
         if cant > self._ultimo_producto["stock"]:
             QMessageBox.warning(self, "Stock", f"Stock insuficiente ({self._ultimo_producto['stock']})")
             return
-        # ver si ya en carrito
         for it in self.cart:
             if it["producto_id"] == self._ultimo_producto["id"]:
                 it["cantidad"] += cant
@@ -140,17 +144,17 @@ class FormularioPOS(QDialog):
             self.table_cart.setItem(r, 2, QTableWidgetItem(it["nombre"]))
             self.table_cart.setItem(r, 3, QTableWidgetItem(str(it["cantidad"])))
             self.table_cart.setItem(r, 4, QTableWidgetItem(f"{it['precio_unitario']:.2f}"))
-        total = sum(it["cantidad"] * it["precio_unitario"] for it in self.cart)
-        self.lbl_total.setText(f"Total: ${total:,.2f}")
-        self._calcular_vuelto()
+        self._calcular_vuelto()  # recalcular total/vuelto dinámicamente
 
     def _on_pago_change(self):
         tipo = self.combo_pago.currentText()
         if tipo == "Efectivo":
             self.input_recibido.setEnabled(True)
+            self.input_recibido.setFocus()  # foco directo para agilizar cobro
         else:
             self.input_recibido.setEnabled(False)
             self.input_recibido.clear()
+        self._calcular_vuelto()
 
     def _calcular_vuelto(self):
         try:
@@ -160,13 +164,15 @@ class FormularioPOS(QDialog):
         total = sum(it["cantidad"] * it["precio_unitario"] for it in self.cart)
         if recibido is not None:
             vuelto = recibido - total
-            # mostrar en etiqueta
             if vuelto < 0:
                 self.lbl_total.setText(f"Total: ${total:,.2f} — Falta: ${abs(vuelto):,.2f}")
+                self.lbl_total.setStyleSheet("font-size: 20px; font-weight: bold; color: red;")
             else:
                 self.lbl_total.setText(f"Total: ${total:,.2f} — Vuelto: ${vuelto:,.2f}")
+                self.lbl_total.setStyleSheet("font-size: 20px; font-weight: bold; color: green;")
         else:
             self.lbl_total.setText(f"Total: ${total:,.2f}")
+            self.lbl_total.setStyleSheet("font-size: 20px; font-weight: bold; color: black;")
 
     def _confirmar_venta(self):
         if not self.cart:
@@ -179,23 +185,18 @@ class FormularioPOS(QDialog):
         except:
             QMessageBox.warning(self, "Efectivo", "Monto recibido inválido")
             return
-        items = []
-        for it in self.cart:
-            items.append({
-                "producto_id": it["producto_id"],
-                "cantidad": it["cantidad"],
-                "precio_unitario": it["precio_unitario"]
-            })
+        items = [{"producto_id": it["producto_id"], "cantidad": it["cantidad"], "precio_unitario": it["precio_unitario"]} for it in self.cart]
         ok, res = database.registrar_venta(items, tipo_pago, cliente=None, efectivo_recibido=recibido)
         if ok:
-            venta_id = res
             total = sum(it["cantidad"] * it["precio_unitario"] for it in self.cart)
             vuelto = (recibido - total) if recibido is not None else None
-            QMessageBox.information(self, "Venta registrada", f"Venta ID {venta_id} registrada.\nTotal: ${total:,.2f}\nTipo: {tipo_pago}\nVuelto: {vuelto if vuelto is not None else '-'}")
+            QMessageBox.information(
+                self, "Venta registrada",
+                f"Venta ID {res} registrada.\nTotal: ${total:,.2f}\nTipo: {tipo_pago}\nVuelto: {vuelto if vuelto is not None else '-'}"
+            )
             self.accept()
         else:
             QMessageBox.critical(self, "Error al vender", f"No se pudo registrar: {res}")
 
-    # Exponer carrito (si se necesita fuera)
     def obtener_carrito(self):
         return self.cart

@@ -11,6 +11,8 @@ import database
 from ui_formulario import FormularioProducto
 from ui_vender import FormularioPOS
 from datetime import datetime
+import os
+import shutil
 
 
 class MainWindow(QMainWindow):
@@ -34,10 +36,13 @@ class MainWindow(QMainWindow):
         self.act_reporte = QAction("📊 Reporte ventas", self)
         self.act_bajo_stock = QAction("🖨 Bajo stock", self)
         self.act_reembolsos = QAction("↩️ Reembolsos", self)
+        # NUEVO: backup manual
+        self.act_backup = QAction("💾 Backup", self)
 
         for act in [self.act_agregar, self.act_editar, self.act_eliminar,
                     self.act_vender, self.act_importar, self.act_exportar,
-                    self.act_reporte, self.act_bajo_stock, self.act_reembolsos]:
+                    self.act_reporte, self.act_bajo_stock, self.act_reembolsos,
+                    self.act_backup]:
             toolbar.addAction(act)
 
         # central widget
@@ -91,6 +96,7 @@ class MainWindow(QMainWindow):
         self.act_reporte.triggered.connect(self.generar_reporte_ventas)
         self.act_bajo_stock.triggered.connect(self.imprimir_bajo_stock)
         self.act_reembolsos.triggered.connect(self.abrir_reembolsos)
+        self.act_backup.triggered.connect(self.backup_manual)
 
         self.input_buscar.textChanged.connect(self.aplicar_filtros)
         self.chk_bajo_stock.toggled.connect(self.aplicar_filtros)
@@ -100,6 +106,30 @@ class MainWindow(QMainWindow):
         self.act_vender.setShortcut(QKeySequence("F2"))
         self.act_editar.setShortcut(QKeySequence("F3"))
         self.act_eliminar.setShortcut(QKeySequence("Delete"))
+
+    # -------------------------
+    # Helper Excel (formato tabla: encabezado gris, bordes, autoancho)
+    # -------------------------
+    def formatear_hoja_excel(self, writer, sheet_name, df):
+        ws = writer.sheets[sheet_name]
+        wb = writer.book
+
+        header_fmt = wb.add_format({"bold": True, "bg_color": "#DDDDDD", "border": 1})
+        cell_fmt = wb.add_format({"border": 1})
+
+        # auto ancho + encabezado
+        for c, col in enumerate(df.columns):
+            try:
+                max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
+            except Exception:
+                max_len = len(col) + 2
+            ws.set_column(c, c, max_len)
+            ws.write(0, c, col, header_fmt)
+
+        # bordes a todas las celdas de datos
+        for r in range(1, len(df) + 1):
+            for c in range(len(df.columns)):
+                ws.write(r, c, df.iloc[r - 1, c], cell_fmt)
 
     # -------------------------
     # tabla productos
@@ -251,10 +281,8 @@ class MainWindow(QMainWindow):
             return
         with pd.ExcelWriter(ruta, engine="xlsxwriter") as writer:
             df.to_excel(writer, sheet_name="Stock", index=False)
-            worksheet = writer.sheets["Stock"]
-            for i, col in enumerate(df.columns):
-                max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
-                worksheet.set_column(i, i, max_len)
+            # usar helper de formato
+            self.formatear_hoja_excel(writer, "Stock", df)
         self.status.showMessage(f"✅ Exportado a {ruta}", 4000)
 
     def importar_excel(self):
@@ -327,7 +355,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"No se pudo importar: {e}")
 
     # -------------------------
-    # Reportes - ventas agrupadas por tipo de pago
+    # Reportes - ventas agrupadas por tipo de pago (formato mejorado)
     # -------------------------
     def generar_reporte_ventas(self):
         dlg = QDialog(self)
@@ -371,8 +399,11 @@ class MainWindow(QMainWindow):
                 ws = wb.add_worksheet("Ventas")
                 writer.sheets["Ventas"] = ws
 
+                # formatos
                 bold = wb.add_format({"bold": True})
-                money = wb.add_format({"num_format": "$#,##0.00"})
+                header_fmt = wb.add_format({"bold": True, "bg_color": "#DDDDDD", "border": 1})
+                cell_fmt = wb.add_format({"border": 1})
+                money = wb.add_format({"num_format": "$#,##0.00", "border": 1})
 
                 row = 0
                 total_general = 0
@@ -384,9 +415,9 @@ class MainWindow(QMainWindow):
                     ws.write(row, 0, f"Tipo de pago: {tipo}", bold)
                     row += 1
                     headers = ["Fecha/Hora", "Producto", "Cantidad", "Precio Unitario", "Subtotal"]
-                    ws.write_row(row, 0, headers, bold)
-                    # actualizar largo inicial
+                    # encabezados con formato
                     for i, h in enumerate(headers):
+                        ws.write(row, i, h, header_fmt)
                         max_lens[i] = max(max_lens[i], len(str(h)))
                     row += 1
 
@@ -394,23 +425,28 @@ class MainWindow(QMainWindow):
                     for v in [x for x in ventas if x["tipo_pago"] == tipo]:
                         for item in v["items"]:
                             values = [v["fecha"], item["nombre"], item["cantidad"], item["precio"], item["subtotal"]]
+                            # actualizar ancho
                             for i, val in enumerate(values):
                                 txt = str(val)
                                 max_lens[i] = max(max_lens[i], len(txt))
-                            ws.write(row, 0, v["fecha"])
-                            ws.write(row, 1, item["nombre"])
-                            ws.write(row, 2, item["cantidad"])
+
+                            # escribir con formato de celdas
+                            ws.write(row, 0, v["fecha"], cell_fmt)
+                            ws.write(row, 1, item["nombre"], cell_fmt)
+                            ws.write(row, 2, item["cantidad"], cell_fmt)
                             ws.write_number(row, 3, item["precio"], money)
                             ws.write_number(row, 4, item["subtotal"], money)
                             total_tipo += item["subtotal"]
                             row += 1
 
-                    ws.write(row, 3, "TOTAL " + tipo, bold)
+                    # total del tipo
+                    ws.write(row, 3, "TOTAL " + tipo, header_fmt)
                     ws.write_number(row, 4, total_tipo, money)
                     row += 2
                     total_general += total_tipo
 
-                ws.write(row, 3, "TOTAL GENERAL", bold)
+                # total general
+                ws.write(row, 3, "TOTAL GENERAL", header_fmt)
                 ws.write_number(row, 4, total_general, money)
 
                 # ajustar ancho de columnas según el máximo
@@ -418,7 +454,6 @@ class MainWindow(QMainWindow):
                     ws.set_column(i, i, width + 2)  # un poquito de margen
 
             self.status.showMessage(f"📊 Reporte guardado en {ruta}", 5000)
-
 
     # -------------------------
     # Reembolsos
@@ -466,6 +501,9 @@ class MainWindow(QMainWindow):
         btn_cancel.clicked.connect(dlg.reject)
         dlg.exec()
 
+    # -------------------------
+    # Bajo stock (usa helper de Excel)
+    # -------------------------
     def imprimir_bajo_stock(self):
         productos = [p for p in self._productos_cache if int(p[3]) <= 5]
         if not productos:
@@ -476,9 +514,21 @@ class MainWindow(QMainWindow):
         if ruta:
             with pd.ExcelWriter(ruta, engine="xlsxwriter") as writer:
                 df.to_excel(writer, sheet_name="BajoStock", index=False)
-                ws = writer.sheets["BajoStock"]
-                for i, col in enumerate(df.columns):
-                    max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
-                    ws.set_column(i, i, max_len)
+                self.formatear_hoja_excel(writer, "BajoStock", df)
             self.status.showMessage(f"🖨 Guardado: {ruta}", 4000)
 
+    # -------------------------
+    # NUEVO: Backup manual de la base de datos
+    # -------------------------
+    def backup_manual(self):
+        ruta, _ = QFileDialog.getSaveFileName(self, "Guardar backup", "almacen_backup.db", "Database Files (*.db)")
+        if not ruta:
+            return
+        if not os.path.exists("almacen.db"):
+            QMessageBox.warning(self, "Backup", "No existe el archivo almacen.db")
+            return
+        try:
+            shutil.copy("almacen.db", ruta)
+            QMessageBox.information(self, "Backup", f"Backup guardado en:\n{ruta}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error de Backup", str(e))
