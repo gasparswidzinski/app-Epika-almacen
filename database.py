@@ -14,7 +14,7 @@ def inicializar_db():
     conn = get_connection()
     cur = conn.cursor()
 
-    # Tabla sectores
+    # Tabla sectores (si no existe)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS sectores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,7 +44,7 @@ def inicializar_db():
     CREATE TABLE IF NOT EXISTS movimientos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         producto_id INTEGER,
-        tipo TEXT NOT NULL,        -- 'INGRESO','VENTA','EDIT','ELIM','REEMBOLSO'
+        tipo TEXT NOT NULL,
         cambio INTEGER NOT NULL,
         precio_unitario REAL NOT NULL,
         fecha TEXT NOT NULL,
@@ -53,19 +53,28 @@ def inicializar_db():
     )
     """)
 
-    # Tabla ventas
+    # Tabla ventas (mantenemos la columna 'cliente' por compatibilidad)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS ventas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         fecha TEXT NOT NULL,
-        tipo_pago TEXT NOT NULL,    -- 'Efectivo','Transferencia','QR','Pendiente'
-        estado TEXT NOT NULL,       -- 'PAGADO','PENDIENTE','REEMBOLSADO'
+        tipo_pago TEXT NOT NULL,
+        estado TEXT NOT NULL,
         total REAL NOT NULL,
         efectivo_recibido REAL,
         vuelto REAL,
         cliente TEXT
     )
     """)
+
+    # Si no existe la columna cliente_id la agregamos (migración)
+    cur.execute("PRAGMA table_info(ventas)")
+    cols = [r[1] for r in cur.fetchall()]
+    if "cliente_id" not in cols:
+        try:
+            cur.execute("ALTER TABLE ventas ADD COLUMN cliente_id INTEGER")
+        except Exception:
+            pass
 
     # Tabla items de venta
     cur.execute("""
@@ -81,7 +90,32 @@ def inicializar_db():
     )
     """)
 
-    # Semillas sectores
+    # Tabla clientes
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS clientes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nombre TEXT NOT NULL,
+        telefono TEXT,
+        direccion TEXT,
+        notas TEXT
+    )
+    """)
+
+    # Tabla cobros (cuando se cobran ventas pendientes)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS cobros (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        venta_id INTEGER,
+        cliente_id INTEGER,
+        fecha TEXT,
+        monto REAL,
+        tipo_pago TEXT,
+        FOREIGN KEY(venta_id) REFERENCES ventas(id),
+        FOREIGN KEY(cliente_id) REFERENCES clientes(id)
+    )
+    """)
+
+    # Semillas sectores (si no existen)
     default = [
         ("Fiambreria", 0.60),
         ("Panaderia", 0.40),
@@ -97,7 +131,7 @@ def inicializar_db():
     conn.commit()
     conn.close()
 
-# Alias por compatibilidad
+# Alias
 init_db = inicializar_db
 
 # -----------------------------
@@ -257,7 +291,7 @@ def obtener_productos():
     return data
 
 # -----------------------------
-# STOCK / VENTAS (Fase 2)
+# STOCK / VENTAS
 # -----------------------------
 def modificar_stock(producto_id, cantidad_cambio, detalles=""):
     conn = get_connection()
@@ -277,37 +311,97 @@ def modificar_stock(producto_id, cantidad_cambio, detalles=""):
     conn.commit()
     conn.close()
 
-    # registrar movimiento (tipo VENTA si cambio <0, INGRESO si >0)
     tipo = "VENTA" if cantidad_cambio < 0 else "INGRESO"
     agregar_movimiento(producto_id, tipo, cantidad_cambio, prod[1] or 0.0, detalles=detalles)
     return True
 
 # -----------------------------
-# VENTAS (Fase 2)
+# CLIENTES (nueva funcionalidad FASE 2)
+# -----------------------------
+def agregar_cliente(nombre, telefono="", direccion="", notas=""):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO clientes (nombre, telefono, direccion, notas) VALUES (?, ?, ?, ?)",
+                (nombre, telefono, direccion, notas))
+    cid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return cid
+
+def editar_cliente(cid, nombre, telefono="", direccion="", notas=""):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("UPDATE clientes SET nombre=?, telefono=?, direccion=?, notas=? WHERE id=?",
+                (nombre, telefono, direccion, notas, cid))
+    conn.commit()
+    conn.close()
+
+def eliminar_cliente(cid):
+    conn = get_connection()
+    cur = conn.cursor()
+    # OJO: si hay ventas asociadas, dejar la referencia o prevenir eliminación según política
+    cur.execute("DELETE FROM clientes WHERE id=?", (cid,))
+    conn.commit()
+    conn.close()
+
+def obtener_clientes():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, nombre, telefono, direccion, notas FROM clientes ORDER BY nombre")
+    data = cur.fetchall()
+    conn.close()
+    return data
+
+def obtener_clientes_con_saldo():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT c.id, c.nombre, COALESCE(SUM(v.total),0) as deuda, COUNT(v.id) as cant_pendientes
+        FROM clientes c
+        LEFT JOIN ventas v ON v.cliente_id = c.id AND v.estado='PENDIENTE'
+        GROUP BY c.id
+        ORDER BY deuda DESC
+    """)
+    data = cur.fetchall()
+    conn.close()
+    return data
+
+# -----------------------------
+# VENTAS
 # -----------------------------
 def registrar_venta(items, tipo_pago, cliente=None, efectivo_recibido=None):
     """
     items: list of dicts: {"producto_id": id, "cantidad": n, "precio_unitario": p}
     tipo_pago: 'Efectivo'|'Transferencia'|'QR'|'Pendiente'
-    Si tipo_pago == 'Pendiente', la venta se guarda como estado 'PENDIENTE' y total no suma a caja (esto lo manejamos en reportes)
-    Esta función decrementa stock (si es posible) y registra venta + items + movimientos en transacción.
-    Devuelve (True, venta_id) o (False, mensaje)
+    cliente: None | cliente_id (int) | cliente_nombre (str)
     """
     conn = get_connection()
     cur = conn.cursor()
     try:
-        total = sum(it["cantidad"] * it["precio_unitario"] for it in items)
+        total = round(sum(it["cantidad"] * it["precio_unitario"] for it in items), 2)
         fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         estado = "PAGADO" if tipo_pago != "Pendiente" else "PENDIENTE"
         vuelto = None
 
+        # resolver cliente: obtener cliente_id y cliente_text
+        cliente_id = None
+        cliente_text = ""
+        if cliente is not None:
+            if isinstance(cliente, int):
+                cliente_id = cliente
+                cur.execute("SELECT nombre FROM clientes WHERE id=?", (cliente_id,))
+                r = cur.fetchone()
+                cliente_text = r[0] if r else ""
+            else:
+                # string
+                cliente_text = str(cliente)
+
         # Iniciar transacción
         cur.execute("BEGIN")
-        # crear venta
         cur.execute("""
-            INSERT INTO ventas (fecha, tipo_pago, estado, total, efectivo_recibido, vuelto, cliente)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (fecha, tipo_pago, estado, total, efectivo_recibido, vuelto, cliente))
+            INSERT INTO ventas (fecha, tipo_pago, estado, total, efectivo_recibido, vuelto, cliente, cliente_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (fecha, tipo_pago, estado, total, efectivo_recibido, vuelto, cliente_text, cliente_id))
         venta_id = cur.lastrowid
 
         # procesar items: verificar stock y descontar
@@ -351,8 +445,10 @@ def obtener_ventas(fecha_inicio=None, fecha_fin=None, estado=None):
     conn = get_connection()
     cur = conn.cursor()
     q = """
-        SELECT v.id, v.fecha, v.tipo_pago, v.estado, v.total, v.efectivo_recibido, v.vuelto, v.cliente
+        SELECT v.id, v.fecha, v.tipo_pago, v.estado, v.total, v.efectivo_recibido, v.vuelto,
+               COALESCE(c.nombre, v.cliente) as cliente
         FROM ventas v
+        LEFT JOIN clientes c ON v.cliente_id = c.id
         WHERE 1=1
     """
     params = []
@@ -381,33 +477,42 @@ def obtener_items_venta(venta_id):
     conn.close()
     return data
 
-def marcar_venta_pagada(venta_id, tipo_pago_nuevo=None, recibido=None, vuelto=None):
+def obtener_ventas_pendientes():
+    return obtener_ventas(estado="PENDIENTE")
+
+def marcar_venta_pagada(venta_id, tipo_pago_nuevo=None, recibido=None):
     conn = get_connection()
     cur = conn.cursor()
-    # cambiar estado a PAGADO; si vino como PENDIENTE antes, ahora suma como pagado
-    cur.execute("SELECT estado FROM ventas WHERE id=?", (venta_id,))
+    cur.execute("SELECT estado, total, cliente_id FROM ventas WHERE id=?", (venta_id,))
     row = cur.fetchone()
     if not row:
         conn.close()
         return False, "Venta no encontrada"
     estado_actual = row[0]
+    total = row[1] or 0.0
+    cliente_id = row[2]
+
     if estado_actual == "PAGADO":
         conn.close()
         return False, "Venta ya está pagada"
 
     nuevo_tipo = tipo_pago_nuevo if tipo_pago_nuevo else "Efectivo"
+    vuelto = None
+    if recibido is not None:
+        vuelto = round(recibido - total, 2)
+
     cur.execute("UPDATE ventas SET estado=?, tipo_pago=?, efectivo_recibido=?, vuelto=? WHERE id=?",
                 ("PAGADO", nuevo_tipo, recibido, vuelto, venta_id))
+
+    # insertar registro de cobro
+    cur.execute("INSERT INTO cobros (venta_id, cliente_id, fecha, monto, tipo_pago) VALUES (?, ?, ?, ?, ?)",
+                (venta_id, cliente_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), total, nuevo_tipo))
+
     conn.commit()
     conn.close()
     return True, "Venta marcada como pagada"
 
 def reembolsar_venta(venta_id, items_to_refund=None):
-    """
-    items_to_refund: None => reembolsar toda la venta (todos los items)
-    otherwise list of venta_item ids to refund partially.
-    Se crea una venta con monto negativo o se insertan movimientos negativos que repongan stock.
-    """
     conn = get_connection()
     cur = conn.cursor()
     try:
@@ -417,30 +522,25 @@ def reembolsar_venta(venta_id, items_to_refund=None):
             conn.close()
             return False, "Venta no encontrada"
 
-        # obtener items
         if items_to_refund is None:
             cur.execute("SELECT id, producto_id, cantidad, precio_unitario, subtotal FROM venta_items WHERE venta_id=?", (venta_id,))
             items = cur.fetchall()
         else:
-            # items_to_refund es lista de venta_items.id
             placeholders = ",".join("?" for _ in items_to_refund)
             cur.execute(f"SELECT id, producto_id, cantidad, precio_unitario, subtotal FROM venta_items WHERE id IN ({placeholders})", tuple(items_to_refund))
             items = cur.fetchall()
 
         fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # proceso: por cada item repongo stock y creo movimiento REEMBOLSO
         for itm in items:
             vi_id, pid, cant, precio_unit, subtotal = itm
-            # reponer stock
             cur.execute("SELECT cantidad FROM productos WHERE id=?", (pid,))
             row = cur.fetchone()
             current = row[0] if row else 0
             cur.execute("UPDATE productos SET cantidad=? WHERE id=?", (current + cant, pid))
-            # movimiento
             cur.execute("INSERT INTO movimientos (producto_id, tipo, cambio, precio_unitario, fecha, detalles) VALUES (?, ?, ?, ?, ?, ?)",
                         (pid, "REEMBOLSO", cant, precio_unit, fecha, f"Reembolso de venta {venta_id}"))
-        # opcional: marcar venta como REEMBOLSO si todo fue devuelto
+
         conn.commit()
         conn.close()
         return True, "Reembolso procesado"
@@ -484,6 +584,21 @@ def obtener_ventas_con_detalles():
         """, (venta_id,))
         items = cursor.fetchall()
 
+        # cliente display
+        cliente_display = None
+        if len(v) >= 9:
+            # if cliente_id column exists, prefer lookup
+            try:
+                cur2 = conn.cursor()
+                cur2.execute("SELECT nombre FROM clientes WHERE id=?", (v[8],))
+                r = cur2.fetchone()
+                if r:
+                    cliente_display = r[0]
+            except Exception:
+                pass
+        if not cliente_display:
+            cliente_display = v[7] if len(v) >= 8 else ""
+
         resultado.append({
             "id": v[0],
             "fecha": v[1],
@@ -492,6 +607,7 @@ def obtener_ventas_con_detalles():
             "total": v[4],
             "recibido": v[5],
             "vuelto": v[6],
+            "cliente": cliente_display,
             "items": [
                 {"cantidad": it[0], "precio": it[1], "subtotal": it[2], "nombre": it[3]}
                 for it in items

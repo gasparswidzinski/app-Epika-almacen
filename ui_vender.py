@@ -1,21 +1,34 @@
 # ui_vender.py
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QPushButton,
-    QLineEdit, QMessageBox, QComboBox, QTableWidget, QTableWidgetItem
+    QLineEdit, QMessageBox, QComboBox, QTableWidget, QTableWidgetItem,
+    QInputDialog, QWidget, QFormLayout
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 import database
+from PySide6.QtWidgets import QApplication
 
 class FormularioPOS(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Punto de Venta - Registrar Venta")
-        self.resize(700, 500)
+        self.resize(780, 520)
 
         self.cart = []  # lista de dicts: producto_id, codigo, nombre, cantidad, precio_unitario
 
         layout = QVBoxLayout()
+
+        # Cliente selector (nuevo)
+        cliente_layout = QHBoxLayout()
+        cliente_layout.addWidget(QLabel("Cliente:"))
+        self.combo_cliente = QComboBox()
+        cliente_layout.addWidget(self.combo_cliente)
+        self.btn_nuevo_cliente = QPushButton("➕ Nuevo")
+        cliente_layout.addWidget(self.btn_nuevo_cliente)
+        layout.addLayout(cliente_layout)
+        self.btn_nuevo_cliente.clicked.connect(self._crear_cliente_rapido)
+        self._cargar_clientes()
 
         # Buscador por código, nombre o barcode
         search_layout = QHBoxLayout()
@@ -70,7 +83,7 @@ class FormularioPOS(QDialog):
         self.lbl_total.setStyleSheet("font-size: 20px; font-weight: bold; color: black;")
         bottom.addWidget(self.lbl_total)
         self.btn_confirm = QPushButton("✅ Confirmar Venta")
-        self.btn_confirm.setShortcut(QKeySequence("F10"))  # 🔥 Atajo agregado
+        self.btn_confirm.setShortcut(QKeySequence("F10"))
         bottom.addWidget(self.btn_confirm)
         self.btn_cancel = QPushButton("❌ Cancelar")
         bottom.addWidget(self.btn_cancel)
@@ -86,6 +99,48 @@ class FormularioPOS(QDialog):
 
         # helper: ultimo resultado de búsqueda
         self._ultimo_producto = None
+
+    def _cargar_clientes(self):
+        self.combo_cliente.clear()
+        self.combo_cliente.addItem("(Sin cliente)", None)
+        for c in database.obtener_clientes():
+            cid, nombre, telefono, direccion, notas = c
+            self.combo_cliente.addItem(nombre, cid)
+
+    def _crear_cliente_rapido(self):
+        # diálogo simple para crear cliente
+        d = QDialog(self)
+        d.setWindowTitle("Crear cliente")
+        form = QFormLayout(d)
+        inp_nombre = QLineEdit()
+        inp_telefono = QLineEdit()
+        inp_direccion = QLineEdit()
+        inp_notas = QLineEdit()
+        form.addRow("Nombre:", inp_nombre)
+        form.addRow("Teléfono:", inp_telefono)
+        form.addRow("Dirección:", inp_direccion)
+        form.addRow("Notas:", inp_notas)
+        btns = QHBoxLayout()
+        ok = QPushButton("Crear")
+        cancel = QPushButton("Cancelar")
+        btns.addWidget(ok); btns.addWidget(cancel)
+        form.addRow(btns)
+        ok.clicked.connect(d.accept)
+        cancel.clicked.connect(d.reject)
+        if d.exec():
+            nombre = inp_nombre.text().strip()
+            if not nombre:
+                QMessageBox.warning(self, "Cliente", "El nombre es obligatorio")
+                return
+            telefono = inp_telefono.text().strip()
+            direccion = inp_direccion.text().strip()
+            notas = inp_notas.text().strip()
+            cid = database.agregar_cliente(nombre, telefono, direccion, notas)
+            self._cargar_clientes()
+            # seleccionar el nuevo
+            idx = self.combo_cliente.findData(cid)
+            if idx >= 0:
+                self.combo_cliente.setCurrentIndex(idx)
 
     def _buscar_producto(self):
         q = self.input_buscar.text().strip().lower()
@@ -134,6 +189,7 @@ class FormularioPOS(QDialog):
                 "cantidad": cant,
                 "precio_unitario": self._ultimo_producto["precio"]
             })
+        QApplication.beep()
         self._refrescar_carrito()
 
     def _refrescar_carrito(self):
@@ -144,13 +200,15 @@ class FormularioPOS(QDialog):
             self.table_cart.setItem(r, 2, QTableWidgetItem(it["nombre"]))
             self.table_cart.setItem(r, 3, QTableWidgetItem(str(it["cantidad"])))
             self.table_cart.setItem(r, 4, QTableWidgetItem(f"{it['precio_unitario']:.2f}"))
-        self._calcular_vuelto()  # recalcular total/vuelto dinámicamente
+        total = sum(it["cantidad"] * it["precio_unitario"] for it in self.cart)
+        self.lbl_total.setText(f"Total: ${total:,.2f}")
+        self._calcular_vuelto()
 
     def _on_pago_change(self):
         tipo = self.combo_pago.currentText()
         if tipo == "Efectivo":
             self.input_recibido.setEnabled(True)
-            self.input_recibido.setFocus()  # foco directo para agilizar cobro
+            self.input_recibido.setFocus()
         else:
             self.input_recibido.setEnabled(False)
             self.input_recibido.clear()
@@ -185,15 +243,20 @@ class FormularioPOS(QDialog):
         except:
             QMessageBox.warning(self, "Efectivo", "Monto recibido inválido")
             return
+
+        # obtener cliente seleccionado (puede ser None)
+        cliente_id = self.combo_cliente.currentData()
+        if tipo_pago == "Pendiente" and cliente_id is None:
+            QMessageBox.warning(self, "Cliente requerido", "Debés seleccionar un cliente para ventas pendientes (fiado).")
+            return
+
         items = [{"producto_id": it["producto_id"], "cantidad": it["cantidad"], "precio_unitario": it["precio_unitario"]} for it in self.cart]
-        ok, res = database.registrar_venta(items, tipo_pago, cliente=None, efectivo_recibido=recibido)
+        ok, res = database.registrar_venta(items, tipo_pago, cliente=cliente_id, efectivo_recibido=recibido)
         if ok:
+            venta_id = res
             total = sum(it["cantidad"] * it["precio_unitario"] for it in self.cart)
             vuelto = (recibido - total) if recibido is not None else None
-            QMessageBox.information(
-                self, "Venta registrada",
-                f"Venta ID {res} registrada.\nTotal: ${total:,.2f}\nTipo: {tipo_pago}\nVuelto: {vuelto if vuelto is not None else '-'}"
-            )
+            QMessageBox.information(self, "Venta registrada", f"Venta ID {venta_id} registrada.\nTotal: ${total:,.2f}\nTipo: {tipo_pago}\nVuelto: {vuelto if vuelto is not None else '-'}")
             self.accept()
         else:
             QMessageBox.critical(self, "Error al vender", f"No se pudo registrar: {res}")

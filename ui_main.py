@@ -2,7 +2,8 @@
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
     QTableWidgetItem, QTextEdit, QFileDialog, QLineEdit, QLabel, QCheckBox,
-    QToolBar, QStatusBar, QMessageBox, QDialog, QDateEdit, QPushButton
+    QToolBar, QStatusBar, QMessageBox, QDialog, QDateEdit, QPushButton,
+    QComboBox, QFormLayout
 )
 from PySide6.QtGui import QAction, QColor, QKeySequence
 from PySide6.QtCore import Qt, QDate
@@ -13,7 +14,6 @@ from ui_vender import FormularioPOS
 from datetime import datetime
 import os
 import shutil
-
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -36,13 +36,15 @@ class MainWindow(QMainWindow):
         self.act_reporte = QAction("📊 Reporte ventas", self)
         self.act_bajo_stock = QAction("🖨 Bajo stock", self)
         self.act_reembolsos = QAction("↩️ Reembolsos", self)
-        # NUEVO: backup manual
+        # NUEVAS acciones
+        self.act_clientes = QAction("👥 Clientes", self)
+        self.act_pendientes = QAction("🧾 Ventas Pendientes", self)
         self.act_backup = QAction("💾 Backup", self)
 
         for act in [self.act_agregar, self.act_editar, self.act_eliminar,
                     self.act_vender, self.act_importar, self.act_exportar,
                     self.act_reporte, self.act_bajo_stock, self.act_reembolsos,
-                    self.act_backup]:
+                    self.act_clientes, self.act_pendientes, self.act_backup]:
             toolbar.addAction(act)
 
         # central widget
@@ -96,6 +98,8 @@ class MainWindow(QMainWindow):
         self.act_reporte.triggered.connect(self.generar_reporte_ventas)
         self.act_bajo_stock.triggered.connect(self.imprimir_bajo_stock)
         self.act_reembolsos.triggered.connect(self.abrir_reembolsos)
+        self.act_clientes.triggered.connect(self.abrir_clientes)
+        self.act_pendientes.triggered.connect(self.abrir_pendientes)
         self.act_backup.triggered.connect(self.backup_manual)
 
         self.input_buscar.textChanged.connect(self.aplicar_filtros)
@@ -113,11 +117,8 @@ class MainWindow(QMainWindow):
     def formatear_hoja_excel(self, writer, sheet_name, df):
         ws = writer.sheets[sheet_name]
         wb = writer.book
-
         header_fmt = wb.add_format({"bold": True, "bg_color": "#DDDDDD", "border": 1})
         cell_fmt = wb.add_format({"border": 1})
-
-        # auto ancho + encabezado
         for c, col in enumerate(df.columns):
             try:
                 max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
@@ -125,14 +126,12 @@ class MainWindow(QMainWindow):
                 max_len = len(col) + 2
             ws.set_column(c, c, max_len)
             ws.write(0, c, col, header_fmt)
-
-        # bordes a todas las celdas de datos
         for r in range(1, len(df) + 1):
             for c in range(len(df.columns)):
                 ws.write(r, c, df.iloc[r - 1, c], cell_fmt)
 
     # -------------------------
-    # tabla productos
+    # tabla productos (igual que antes)
     # -------------------------
     def _cargar_productos(self):
         self._productos_cache = database.obtener_productos()
@@ -281,7 +280,6 @@ class MainWindow(QMainWindow):
             return
         with pd.ExcelWriter(ruta, engine="xlsxwriter") as writer:
             df.to_excel(writer, sheet_name="Stock", index=False)
-            # usar helper de formato
             self.formatear_hoja_excel(writer, "Stock", df)
         self.status.showMessage(f"✅ Exportado a {ruta}", 4000)
 
@@ -387,19 +385,16 @@ class MainWindow(QMainWindow):
                 self.status.showMessage("ℹ️ No se encontraron ventas en el rango", 4000)
                 return
 
-            # ordenar por tipo de pago
             ventas.sort(key=lambda v: v["tipo_pago"])
             ruta, _ = QFileDialog.getSaveFileName(self, "Guardar reporte", "reporte_ventas.xlsx", "Excel Files (*.xlsx)")
             if not ruta:
                 return
 
-            import pandas as pd
             with pd.ExcelWriter(ruta, engine="xlsxwriter") as writer:
                 wb = writer.book
                 ws = wb.add_worksheet("Ventas")
                 writer.sheets["Ventas"] = ws
 
-                # formatos
                 bold = wb.add_format({"bold": True})
                 header_fmt = wb.add_format({"bold": True, "bg_color": "#DDDDDD", "border": 1})
                 cell_fmt = wb.add_format({"border": 1})
@@ -407,15 +402,12 @@ class MainWindow(QMainWindow):
 
                 row = 0
                 total_general = 0
-
-                # para ajustar columnas dinámicamente
-                max_lens = [0, 0, 0, 0, 0]
+                max_lens = [0,0,0,0,0]
 
                 for tipo in sorted(set(v["tipo_pago"] for v in ventas)):
                     ws.write(row, 0, f"Tipo de pago: {tipo}", bold)
                     row += 1
                     headers = ["Fecha/Hora", "Producto", "Cantidad", "Precio Unitario", "Subtotal"]
-                    # encabezados con formato
                     for i, h in enumerate(headers):
                         ws.write(row, i, h, header_fmt)
                         max_lens[i] = max(max_lens[i], len(str(h)))
@@ -425,12 +417,10 @@ class MainWindow(QMainWindow):
                     for v in [x for x in ventas if x["tipo_pago"] == tipo]:
                         for item in v["items"]:
                             values = [v["fecha"], item["nombre"], item["cantidad"], item["precio"], item["subtotal"]]
-                            # actualizar ancho
                             for i, val in enumerate(values):
                                 txt = str(val)
                                 max_lens[i] = max(max_lens[i], len(txt))
 
-                            # escribir con formato de celdas
                             ws.write(row, 0, v["fecha"], cell_fmt)
                             ws.write(row, 1, item["nombre"], cell_fmt)
                             ws.write(row, 2, item["cantidad"], cell_fmt)
@@ -439,19 +429,16 @@ class MainWindow(QMainWindow):
                             total_tipo += item["subtotal"]
                             row += 1
 
-                    # total del tipo
                     ws.write(row, 3, "TOTAL " + tipo, header_fmt)
                     ws.write_number(row, 4, total_tipo, money)
                     row += 2
                     total_general += total_tipo
 
-                # total general
                 ws.write(row, 3, "TOTAL GENERAL", header_fmt)
                 ws.write_number(row, 4, total_general, money)
 
-                # ajustar ancho de columnas según el máximo
                 for i, width in enumerate(max_lens):
-                    ws.set_column(i, i, width + 2)  # un poquito de margen
+                    ws.set_column(i, i, width + 2)
 
             self.status.showMessage(f"📊 Reporte guardado en {ruta}", 5000)
 
@@ -532,3 +519,245 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Backup", f"Backup guardado en:\n{ruta}")
         except Exception as e:
             QMessageBox.critical(self, "Error de Backup", str(e))
+
+    # -------------------------
+    # CLIENTES - ABM (NUEVO)
+    # -------------------------
+    def abrir_clientes(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Clientes")
+        vbox = QVBoxLayout(dlg)
+        table = QTableWidget()
+        clientes = database.obtener_clientes()
+        table.setColumnCount(5)
+        table.setHorizontalHeaderLabels(["ID", "Nombre", "Teléfono", "Dirección", "Notas"])
+        table.setRowCount(len(clientes))
+        for r, c in enumerate(clientes):
+            table.setItem(r,0, QTableWidgetItem(str(c[0])))
+            table.setItem(r,1, QTableWidgetItem(str(c[1])))
+            table.setItem(r,2, QTableWidgetItem(str(c[2] or "")))
+            table.setItem(r,3, QTableWidgetItem(str(c[3] or "")))
+            table.setItem(r,4, QTableWidgetItem(str(c[4] or "")))
+        vbox.addWidget(table)
+
+        btns = QHBoxLayout()
+        btn_add = QPushButton("➕ Agregar")
+        btn_edit = QPushButton("✏️ Editar")
+        btn_del = QPushButton("🗑 Eliminar")
+        btn_close = QPushButton("Cerrar")
+        btns.addWidget(btn_add); btns.addWidget(btn_edit); btns.addWidget(btn_del); btns.addWidget(btn_close)
+        vbox.addLayout(btns)
+
+        def agregar_cliente():
+            d = QDialog(self)
+            d.setWindowTitle("Agregar Cliente")
+            f = QFormLayout(d)
+            inp_nombre = QLineEdit()
+            inp_tel = QLineEdit()
+            inp_dir = QLineEdit()
+            inp_not = QLineEdit()
+            f.addRow("Nombre:", inp_nombre)
+            f.addRow("Teléfono:", inp_tel)
+            f.addRow("Dirección:", inp_dir)
+            f.addRow("Notas:", inp_not)
+            ok = QPushButton("Crear")
+            canc = QPushButton("Cancelar")
+            row = QHBoxLayout()
+            row.addWidget(ok); row.addWidget(canc)
+            f.addRow(row)
+            ok.clicked.connect(d.accept)
+            canc.clicked.connect(d.reject)
+            if d.exec():
+                nombre = inp_nombre.text().strip()
+                if not nombre:
+                    QMessageBox.warning(self, "Cliente", "Nombre requerido")
+                    return
+                telefono = inp_tel.text().strip()
+                direccion = inp_dir.text().strip()
+                notas = inp_not.text().strip()
+                database.agregar_cliente(nombre, telefono, direccion, notas)
+                QMessageBox.information(self, "Clientes", "Cliente agregado")
+                dlg.accept()
+                self.actualizar_historial()
+                self.actualizar_tabla()
+                self.abrir_clientes()
+
+        def editar_cliente():
+            r = table.currentRow()
+            if r < 0:
+                QMessageBox.warning(self, "Seleccionar", "Seleccioná un cliente")
+                return
+            cid = int(table.item(r,0).text())
+            d = QDialog(self)
+            d.setWindowTitle("Editar Cliente")
+            f = QFormLayout(d)
+            inp_nombre = QLineEdit(table.item(r,1).text())
+            inp_tel = QLineEdit(table.item(r,2).text())
+            inp_dir = QLineEdit(table.item(r,3).text())
+            inp_not = QLineEdit(table.item(r,4).text())
+            f.addRow("Nombre:", inp_nombre)
+            f.addRow("Teléfono:", inp_tel)
+            f.addRow("Dirección:", inp_dir)
+            f.addRow("Notas:", inp_not)
+            ok = QPushButton("Guardar")
+            canc = QPushButton("Cancelar")
+            row = QHBoxLayout()
+            row.addWidget(ok); row.addWidget(canc)
+            f.addRow(row)
+            ok.clicked.connect(d.accept)
+            canc.clicked.connect(d.reject)
+            if d.exec():
+                database.editar_cliente(cid, inp_nombre.text().strip(), inp_tel.text().strip(), inp_dir.text().strip(), inp_not.text().strip())
+                QMessageBox.information(self, "Clientes", "Cliente editado")
+                dlg.accept()
+                self.abrir_clientes()
+
+        def eliminar_cliente():
+            r = table.currentRow()
+            if r < 0:
+                QMessageBox.warning(self, "Seleccionar", "Seleccioná un cliente")
+                return
+            cid = int(table.item(r,0).text())
+            confirm = QMessageBox.question(self, "Confirmar", "¿Eliminar cliente seleccionado?")
+            if confirm == QMessageBox.Yes:
+                database.eliminar_cliente(cid)
+                QMessageBox.information(self, "Clientes", "Cliente eliminado")
+                dlg.accept()
+                self.abrir_clientes()
+
+        btn_add.clicked.connect(agregar_cliente)
+        btn_edit.clicked.connect(editar_cliente)
+        btn_del.clicked.connect(eliminar_cliente)
+        btn_close.clicked.connect(dlg.reject)
+
+        dlg.exec()
+
+    # -------------------------
+    # PENDIENTES (ventas a cuenta) - NUEVO
+    # -------------------------
+    def abrir_pendientes(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Ventas Pendientes / Deudores")
+        vbox = QVBoxLayout(dlg)
+
+        # lista de ventas pendientes
+        ventas = database.obtener_ventas(estado="PENDIENTE")
+        # agrupar por cliente
+        agrup = {}
+        for v in ventas:
+            venta_id, fecha, tipo, estado, total, recibido, vuelto, cliente = v
+            key = cliente or "(Sin cliente)"
+            agrup.setdefault(key, []).append((venta_id, fecha, total))
+
+        # tabla por cliente
+        table = QTableWidget()
+        table.setColumnCount(3)
+        table.setHorizontalHeaderLabels(["Cliente", "Ventas pendientes", "Total adeudado"])
+        table.setRowCount(len(agrup))
+        for r, (cliente, ventas_cliente) in enumerate(agrup.items()):
+            suma = sum(v[2] for v in ventas_cliente)
+            table.setItem(r, 0, QTableWidgetItem(str(cliente)))
+            table.setItem(r, 1, QTableWidgetItem(str(len(ventas_cliente))))
+            table.setItem(r, 2, QTableWidgetItem(f"${suma:,.2f}"))
+        vbox.addWidget(table)
+
+        btns = QHBoxLayout()
+        btn_ver = QPushButton("🔎 Ver ventas del cliente")
+        btn_cobrar = QPushButton("💰 Cobrar venta seleccionada")
+        btn_close = QPushButton("Cerrar")
+        btns.addWidget(btn_ver); btns.addWidget(btn_cobrar); btns.addWidget(btn_close)
+        vbox.addLayout(btns)
+
+        def ver_ventas():
+            r = table.currentRow()
+            if r < 0:
+                QMessageBox.warning(self, "Seleccionar", "Seleccioná un cliente")
+                return
+            cliente = table.item(r,0).text()
+            # mostrar detalle de ventas de ese cliente
+            sub = QDialog(self)
+            sub.setWindowTitle(f"Ventas pendientes - {cliente}")
+            sv = QVBoxLayout(sub)
+            sub_table = QTableWidget()
+            sub_table.setColumnCount(4)
+            sub_table.setHorizontalHeaderLabels(["Venta ID", "Fecha", "Total", "Detalle"])
+            # buscar ventas con ese cliente
+            rows = []
+            for v in ventas:
+                if (v[7] or "(Sin cliente)") == cliente:
+                    rows.append(v)
+            sub_table.setRowCount(len(rows))
+            for rr, vv in enumerate(rows):
+                sub_table.setItem(rr,0, QTableWidgetItem(str(vv[0])))
+                sub_table.setItem(rr,1, QTableWidgetItem(str(vv[1])))
+                sub_table.setItem(rr,2, QTableWidgetItem(f"${vv[4]:,.2f}"))
+                # detalle (cargar items)
+                items = database.obtener_items_venta(vv[0])
+                detalle = ", ".join([f"{it[2]} x{it[3]}" for it in items])
+                sub_table.setItem(rr,3, QTableWidgetItem(detalle))
+            sv.addWidget(sub_table)
+            btn_ok = QPushButton("Cerrar")
+            sv.addWidget(btn_ok)
+            btn_ok.clicked.connect(sub.reject)
+            sub.exec()
+
+        def cobrar():
+            # pedimos selección de cliente y luego selección de venta (simplificamos: pedimos ID manual)
+            r = table.currentRow()
+            if r < 0:
+                QMessageBox.warning(self, "Seleccionar", "Seleccioná un cliente")
+                return
+            cliente = table.item(r,0).text()
+            # list ventas para ese cliente
+            ventas_cliente = [v for v in ventas if (v[7] or "(Sin cliente)") == cliente]
+            if not ventas_cliente:
+                QMessageBox.information(self, "Cobrar", "No hay ventas para este cliente")
+                return
+            # pedir al usuario qué venta cobrar (si hay varias) - simple: mostrar ids
+            opciones = [f"ID {v[0]} - {v[1]} - ${v[4]:,.2f}" for v in ventas_cliente]
+            sel, ok = QInputDialog.getItem(self, "Seleccionar venta", "Ventas pendientes:", opciones, 0, False)
+            if not ok:
+                return
+            idx = opciones.index(sel)
+            venta_id = ventas_cliente[idx][0]
+            total = ventas_cliente[idx][2]
+
+            # diálogo cobro
+            d = QDialog(self)
+            d.setWindowTitle(f"Cobrar Venta {venta_id}")
+            f = QFormLayout(d)
+            combo = QComboBox()
+            combo.addItems(["Efectivo", "Transferencia", "QR"])
+            f.addRow("Tipo de pago:", combo)
+            inp_rec = QLineEdit()
+            inp_rec.setPlaceholderText("0.00 (si efectivo)")
+            f.addRow("Monto recibido:", inp_rec)
+            btn_ok = QPushButton("Cobrar")
+            btn_cancel = QPushButton("Cancelar")
+            row = QHBoxLayout()
+            row.addWidget(btn_ok); row.addWidget(btn_cancel)
+            f.addRow(row)
+            btn_ok.clicked.connect(d.accept)
+            btn_cancel.clicked.connect(d.reject)
+            if d.exec():
+                tipo = combo.currentText()
+                recibido = None
+                try:
+                    recibido = float(inp_rec.text()) if inp_rec.text().strip() != "" else None
+                except:
+                    QMessageBox.warning(self, "Monto", "Monto inválido")
+                    return
+                ok2, msg = database.marcar_venta_pagada(venta_id, tipo, recibido)
+                if ok2:
+                    QMessageBox.information(self, "Cobro", "Venta cobrada correctamente")
+                    self.actualizar_tabla()
+                    self.actualizar_historial()
+                    dlg.accept()
+                else:
+                    QMessageBox.critical(self, "Error", msg)
+
+        from PySide6.QtWidgets import QInputDialog  # import local
+        btn_ver.clicked.connect(ver_ventas)
+        btn_cobrar.clicked.connect(cobrar)
+        btn_close.clicked.connect(dlg.reject)
+        dlg.exec()
