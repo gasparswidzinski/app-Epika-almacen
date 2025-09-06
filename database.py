@@ -616,3 +616,18 @@ def obtener_ventas_con_detalles():
 
     conn.close()
     return resultado
+
+def obtener_producto_por_barcode(codigo_barras):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT p.id, p.codigo, p.nombre, p.cantidad, p.costo,
+               COALESCE(s.nombre, '') as sector, p.precio, COALESCE(p.codigo_barras, ''), p.movimientos
+        FROM productos p
+        LEFT JOIN sectores s ON p.sector_id = s.id
+        WHERE p.codigo_barras = ?
+    """, (codigo_barras,))
+    prod = cur.fetchone()
+    conn.close()
+    return prod
+

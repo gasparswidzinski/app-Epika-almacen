@@ -1,123 +1,121 @@
 # ui_formulario.py
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton,
-    QHBoxLayout, QComboBox, QMessageBox, QSpinBox
+    QDialog, QFormLayout, QLineEdit, QSpinBox, QComboBox,
+    QDialogButtonBox, QMessageBox
 )
 from PySide6.QtCore import Qt
 import database
 
 class FormularioProducto(QDialog):
-    def __init__(self, parent=None, producto=None):
+    """
+    Formulario simple para crear/editar productos.
+    Parámetros:
+      producto: tuple/row opcional (id, codigo, nombre, cantidad, costo, sector_nombre, precio, codigo_barras, movs)
+      codigo_barras: si se pasa, lo precarga en el campo correspondiente (útil para scanner)
+    """
+    def __init__(self, parent=None, producto=None, codigo_barras=""):
         super().__init__(parent)
-        self.setWindowTitle("Formulario de Producto")
-        self.resize(420, 380)
+        self.setWindowTitle("Agregar/Editar Producto")
+        self.resize(420, 320)
         self.producto = producto
 
-        layout = QVBoxLayout()
+        form = QFormLayout(self)
 
-        # Código
-        layout.addWidget(QLabel("Código:"))
         self.input_codigo = QLineEdit()
-        layout.addWidget(self.input_codigo)
+        form.addRow("Código interno:", self.input_codigo)
 
-        # Nombre
-        layout.addWidget(QLabel("Nombre:"))
         self.input_nombre = QLineEdit()
-        layout.addWidget(self.input_nombre)
+        form.addRow("Nombre:", self.input_nombre)
 
-        # Cantidad
-        layout.addWidget(QLabel("Cantidad:"))
         self.input_cantidad = QSpinBox()
-        self.input_cantidad.setRange(0, 10**9)
-        layout.addWidget(self.input_cantidad)
+        self.input_cantidad.setRange(0, 1000000)
+        form.addRow("Cantidad inicial:", self.input_cantidad)
 
-        # Costo
-        layout.addWidget(QLabel("Costo (lo que pagás):"))
         self.input_costo = QLineEdit()
         self.input_costo.setPlaceholderText("0.00")
-        layout.addWidget(self.input_costo)
+        form.addRow("Costo (lo que pagás):", self.input_costo)
 
-        # Sector
-        layout.addWidget(QLabel("Sector:"))
-        self.combo_sector = QComboBox()
-        self._cargar_sectores()
-        layout.addWidget(self.combo_sector)
-
-        # Precio (auto)
-        layout.addWidget(QLabel("Precio (calculado):"))
-        self.input_precio = QLineEdit()
-        self.input_precio.setReadOnly(True)
-        layout.addWidget(self.input_precio)
-
-        # Código de barras
-        layout.addWidget(QLabel("Código de Barras:"))
-        self.input_codigobarras = QLineEdit()
-        layout.addWidget(self.input_codigobarras)
-
-        # Botones
-        btns = QHBoxLayout()
-        self.btn_guardar = QPushButton("✅ Guardar")
-        self.btn_cancelar = QPushButton("❌ Cancelar")
-        btns.addWidget(self.btn_guardar)
-        btns.addWidget(self.btn_cancelar)
-        layout.addLayout(btns)
-
-        self.setLayout(layout)
-
-        # Conexiones
-        self.input_costo.textChanged.connect(self._actualizar_precio)
-        self.combo_sector.currentIndexChanged.connect(self._actualizar_precio)
-        self.btn_guardar.clicked.connect(self._guardar)
-        self.btn_cancelar.clicked.connect(self.reject)
-
-        # Si es edición, precargar
-        if self.producto:
-            # producto: (id, codigo, nombre, cantidad, costo, sector, precio, codigo_barras, movimientos)
-            self.input_codigo.setText(str(self.producto[1]))
-            self.input_nombre.setText(str(self.producto[2]))
-            self.input_cantidad.setValue(int(self.producto[3]))
-            self.input_costo.setText(str(self.producto[4] if self.producto[4] is not None else "0"))
-            if self.producto[5]:
-                idx = self.combo_sector.findText(self.producto[5])
-                if idx >= 0:
-                    self.combo_sector.setCurrentIndex(idx)
-            self.input_precio.setText(str(self.producto[6] if self.producto[6] is not None else "0"))
-            self.input_codigobarras.setText(str(self.producto[7] if self.producto[7] is not None else ""))
-
-    def _cargar_sectores(self):
-        self.combo_sector.clear()
-        sectores = database.obtener_sectores()
-        for s in sectores:
-            self.combo_sector.addItem(f"{s[1]} ({int(s[2]*100)}%)", s[0])
-
-    def _actualizar_precio(self):
+        self.input_sector = QComboBox()
         try:
-            costo = float(self.input_costo.text()) if self.input_costo.text().strip() != "" else 0.0
-            sector_id = self.combo_sector.currentData()
-            margen = database.obtener_margen_sector(sector_id)
-            precio = round(costo + (costo * margen), 2)
-            self.input_precio.setText(str(precio))
+            sectores = database.obtener_sectores()
+            for s in sectores:
+                # s is (id, nombre, margen)
+                sid = s[0]
+                sname = s[1]
+                self.input_sector.addItem(sname, sid)
         except Exception:
-            self.input_precio.setText("")
+            pass
+        form.addRow("Sector:", self.input_sector)
 
-    def _guardar(self):
+        self.input_codigobarras = QLineEdit()
+        form.addRow("Código de Barras:", self.input_codigobarras)
+
+        # Si se pasa un producto para editar, poblar campos
+        if producto:
+            try:
+                # producto como tupla: (id, codigo, nombre, cantidad, costo, sector_nombre, precio, codigo_barras, movs)
+                self.input_codigo.setText(str(producto[1] or ""))
+                self.input_nombre.setText(str(producto[2] or ""))
+                try:
+                    self.input_cantidad.setValue(int(producto[3]))
+                except:
+                    pass
+                try:
+                    self.input_costo.setText(str(producto[4] if producto[4] is not None else ""))
+                except:
+                    pass
+                try:
+                    cb = str(producto[7] or "")
+                    self.input_codigobarras.setText(cb)
+                except:
+                    pass
+                # intentar seleccionar sector si producto[5] es nombre
+                try:
+                    sector_nombre = producto[5] if len(producto) > 5 else None
+                except:
+                    sector_nombre = None
+                if sector_nombre:
+                    idx = self.input_sector.findText(str(sector_nombre))
+                    if idx >= 0:
+                        self.input_sector.setCurrentIndex(idx)
+            except Exception:
+                pass
+
+        # si se pasó codigo_barras (desde scanner), precargar
+        if codigo_barras:
+            self.input_codigobarras.setText(str(codigo_barras))
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         try:
-            codigo = self.input_codigo.text().strip()
-            nombre = self.input_nombre.text().strip()
+            buttons.button(QDialogButtonBox.Ok).setAutoDefault(False)
+            buttons.button(QDialogButtonBox.Cancel).setAutoDefault(False)
+        except Exception:
+            pass
+        form.addRow(buttons)
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+
+    def _on_accept(self):
+        codigo = self.input_codigo.text().strip()
+        nombre = self.input_nombre.text().strip()
+        if not codigo or not nombre:
+            QMessageBox.warning(self, "Validación", "Código y Nombre son obligatorios.")
+            return
+        try:
             cantidad = int(self.input_cantidad.value())
+        except:
+            cantidad = 0
+        try:
             costo = float(self.input_costo.text()) if self.input_costo.text().strip() != "" else 0.0
-            sector_id = self.combo_sector.currentData()
-            cod_barras = self.input_codigobarras.text().strip()
+        except:
+            QMessageBox.warning(self, "Costo", "Costo inválido")
+            return
+        sector_id = self.input_sector.currentData() if self.input_sector.currentIndex() >= 0 else None
+        cod_barras = self.input_codigobarras.text().strip()
 
-            if not codigo or not nombre:
-                QMessageBox.warning(self, "Validación", "Código y Nombre son obligatorios.")
-                return
-
-            if self.producto:
-                database.editar_producto(self.producto[0], codigo, nombre, cantidad, costo, sector_id, cod_barras)
-            else:
-                database.agregar_o_actualizar_producto(codigo, nombre, cantidad, costo, sector_id, cod_barras)
-
+        try:
+            database.agregar_o_actualizar_producto(codigo, nombre, cantidad, costo, sector_id, codigo_barras=cod_barras)
+            QMessageBox.information(self, "Producto", "Producto guardado correctamente.")
             self.accept()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo guardar el producto:\n{e}")

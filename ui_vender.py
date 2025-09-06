@@ -1,25 +1,24 @@
-# ui_vender.py
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QPushButton,
     QLineEdit, QMessageBox, QComboBox, QTableWidget, QTableWidgetItem,
-    QInputDialog, QWidget, QFormLayout
+    QFormLayout, QDialogButtonBox, QApplication
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence
 import database
-from PySide6.QtWidgets import QApplication
+
 
 class FormularioPOS(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, producto_preseleccionado=None):
         super().__init__(parent)
         self.setWindowTitle("Punto de Venta - Registrar Venta")
         self.resize(780, 520)
 
-        self.cart = []  # lista de dicts: producto_id, codigo, nombre, cantidad, precio_unitario
+        self.cart = []
 
         layout = QVBoxLayout()
 
-        # Cliente selector (nuevo)
+        # Cliente selector
         cliente_layout = QHBoxLayout()
         cliente_layout.addWidget(QLabel("Cliente:"))
         self.combo_cliente = QComboBox()
@@ -39,9 +38,13 @@ class FormularioPOS(QDialog):
         search_layout.addWidget(self.btn_buscar)
         layout.addLayout(search_layout)
 
-        # Resultado simple: agrego por código exacto o por primer match
+        # Conexiones búsqueda (scanner + botón)
+        self._scan_timer = QTimer(self)
+        self._scan_timer.setSingleShot(True)
+        self._scan_timer.timeout.connect(self._buscar_producto)
         self.btn_buscar.clicked.connect(self._buscar_producto)
         self.input_buscar.returnPressed.connect(self._buscar_producto)
+        self.input_buscar.textChanged.connect(self._on_text_changed)
 
         # Tabla carrito
         self.table_cart = QTableWidget()
@@ -69,7 +72,6 @@ class FormularioPOS(QDialog):
             self.combo_pago.addItem(t)
         pay_layout.addWidget(self.combo_pago)
 
-        # Efectivo recibido (solo si Efectivo)
         pay_layout.addWidget(QLabel("Monto recibido (si efectivo):"))
         self.input_recibido = QLineEdit()
         self.input_recibido.setPlaceholderText("0.00")
@@ -91,24 +93,44 @@ class FormularioPOS(QDialog):
 
         self.setLayout(layout)
 
-        # conexiones
+        # Conexiones principales
         self.btn_confirm.clicked.connect(self._confirmar_venta)
         self.btn_cancel.clicked.connect(self.reject)
         self.combo_pago.currentIndexChanged.connect(self._on_pago_change)
         self.input_recibido.textChanged.connect(self._calcular_vuelto)
 
-        # helper: ultimo resultado de búsqueda
         self._ultimo_producto = None
 
+        # 🔧 FIX: evitar que Enter dispare botones por defecto
+        self.btn_nuevo_cliente.setAutoDefault(False)
+        self.btn_buscar.setAutoDefault(False)
+        self.btn_agregar.setAutoDefault(False)
+        self.btn_confirm.setAutoDefault(False)
+        self.btn_cancel.setAutoDefault(False)
+
+        # Producto preseleccionado (primer escaneo desde ui_main)
+        if producto_preseleccionado:
+            try:
+                pid, codigo, nombre, cantidad, costo, sector, precio, codigo_barras, movs = producto_preseleccionado
+                if int(cantidad) > 0:
+                    self._ultimo_producto = {
+                        "id": pid, "codigo": codigo, "nombre": nombre,
+                        "stock": int(cantidad), "precio": float(precio)
+                    }
+                    self._agregar_al_carrito(cant_override=1, clear_search=False)
+            except Exception:
+                pass
+        
+        QTimer.singleShot(0, self.input_buscar.setFocus)
+
+    # ---------------- Clientes ----------------
     def _cargar_clientes(self):
         self.combo_cliente.clear()
         self.combo_cliente.addItem("(Sin cliente)", None)
         for c in database.obtener_clientes():
-            cid, nombre, telefono, direccion, notas = c
-            self.combo_cliente.addItem(nombre, cid)
+            self.combo_cliente.addItem(c[1], c[0])
 
     def _crear_cliente_rapido(self):
-        # diálogo simple para crear cliente
         d = QDialog(self)
         d.setWindowTitle("Crear cliente")
         form = QFormLayout(d)
@@ -120,13 +142,12 @@ class FormularioPOS(QDialog):
         form.addRow("Teléfono:", inp_telefono)
         form.addRow("Dirección:", inp_direccion)
         form.addRow("Notas:", inp_notas)
-        btns = QHBoxLayout()
-        ok = QPushButton("Crear")
-        cancel = QPushButton("Cancelar")
-        btns.addWidget(ok); btns.addWidget(cancel)
-        form.addRow(btns)
-        ok.clicked.connect(d.accept)
-        cancel.clicked.connect(d.reject)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setAutoDefault(False)
+        buttons.button(QDialogButtonBox.Cancel).setAutoDefault(False)
+        form.addRow(buttons)
+        buttons.accepted.connect(d.accept)
+        buttons.rejected.connect(d.reject)
         if d.exec():
             nombre = inp_nombre.text().strip()
             if not nombre:
@@ -137,40 +158,105 @@ class FormularioPOS(QDialog):
             notas = inp_notas.text().strip()
             cid = database.agregar_cliente(nombre, telefono, direccion, notas)
             self._cargar_clientes()
-            # seleccionar el nuevo
             idx = self.combo_cliente.findData(cid)
             if idx >= 0:
                 self.combo_cliente.setCurrentIndex(idx)
 
+    # ---------------- Scanner / Búsqueda ----------------
+    def _on_text_changed(self, texto):
+        if texto.strip():
+            self._scan_timer.start(250)
+
     def _buscar_producto(self):
-        q = self.input_buscar.text().strip().lower()
+        q = self.input_buscar.text().strip()
         if not q:
-            QMessageBox.information(self, "Buscar", "Ingresá código, nombre o barcode")
             return
+
         productos = database.obtener_productos()
         encontrado = None
         for p in productos:
             pid, codigo, nombre, cantidad, costo, sector, precio, codigo_barras, movs = p
-            if str(codigo).lower() == q or str(codigo_barras).lower() == q or q in str(nombre).lower():
+            codigo = str(codigo or "").strip().lower()
+            codigo_barras = str(codigo_barras or "").strip().lower()
+            nombre = str(nombre or "").strip().lower()
+            if q.lower() == codigo or q.lower() == codigo_barras or q.lower() in nombre:
                 encontrado = p
                 break
+
         if encontrado:
             self._ultimo_producto = {
                 "id": encontrado[0], "codigo": encontrado[1], "nombre": encontrado[2],
                 "stock": int(encontrado[3]), "precio": float(encontrado[6])
             }
-            QMessageBox.information(
-                self, "Producto encontrado",
-                f"{self._ultimo_producto['nombre']} — Stock: {self._ultimo_producto['stock']} — Precio: ${self._ultimo_producto['precio']}"
-            )
+            QApplication.beep()
+            self._agregar_al_carrito(cant_override=1, clear_search=True)
         else:
-            QMessageBox.information(self, "No encontrado", "No se encontró el producto")
+            QApplication.beep()
+            QApplication.beep()
+            self._alta_rapida_producto(codigo_barras=q)
+            prod = database.obtener_producto_por_barcode(q)
+            if prod:
+                self._ultimo_producto = {
+                    "id": prod[0], "codigo": prod[1], "nombre": prod[2],
+                    "stock": int(prod[3]), "precio": float(prod[6]) if len(prod) > 6 else 0.0
+                }
+                self._agregar_al_carrito(cant_override=1, clear_search=True)
+            else:
+                QMessageBox.information(self, "Alta rápida", "Producto creado, pero no se pudo recuperar para agregar al carrito. Vuelva a escanear.")
 
-    def _agregar_al_carrito(self):
+        self.input_buscar.clear()
+        self.input_buscar.setFocus()
+
+    # ---------------- Alta rápida ----------------
+    def _alta_rapida_producto(self, codigo_barras=""):
+        d = QDialog(self)
+        d.setWindowTitle("Alta rápida de producto")
+        f = QFormLayout(d)
+        inp_codigo = QLineEdit()
+        inp_codigo.setText(codigo_barras)
+        inp_nombre = QLineEdit()
+        inp_cantidad = QSpinBox()
+        inp_cantidad.setRange(0, 100000)
+        inp_cantidad.setValue(1)
+        inp_costo = QLineEdit()
+        sectores = database.obtener_sectores()
+        combo_sector = QComboBox()
+        for s in sectores:
+            combo_sector.addItem(s[1], s[0])
+        f.addRow("Código (barcode):", inp_codigo)
+        f.addRow("Nombre:", inp_nombre)
+        f.addRow("Cantidad inicial:", inp_cantidad)
+        f.addRow("Costo:", inp_costo)
+        f.addRow("Sector:", combo_sector)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setAutoDefault(False)
+        buttons.button(QDialogButtonBox.Cancel).setAutoDefault(False)
+        f.addRow(buttons)
+        buttons.accepted.connect(d.accept)
+        buttons.rejected.connect(d.reject)
+        if d.exec():
+            codigo = inp_codigo.text().strip()
+            nombre = inp_nombre.text().strip()
+            cantidad = int(inp_cantidad.value())
+            try:
+                costo = float(inp_costo.text()) if inp_costo.text().strip() != "" else 0.0
+            except:
+                QMessageBox.warning(self, "Costo", "Costo inválido")
+                return
+            sector_id = combo_sector.currentData() if combo_sector.currentIndex() >= 0 else None
+            if not codigo or not nombre:
+                QMessageBox.warning(self, "Datos", "Código y nombre son obligatorios")
+                return
+            database.agregar_o_actualizar_producto(codigo, nombre, cantidad, costo, sector_id, codigo_barras=codigo)
+            QMessageBox.information(self, "Producto", f"Producto '{nombre}' agregado/actualizado")
+            return  # 👈 no cerrar el POS
+
+    # ---------------- Carrito ----------------
+    def _agregar_al_carrito(self, cant_override=None, clear_search=False):
         if not self._ultimo_producto:
             QMessageBox.warning(self, "Agregar", "Primero buscá un producto")
             return
-        cant = int(self.spin_cant.value())
+        cant = int(self.spin_cant.value()) if cant_override is None else int(cant_override)
         if cant <= 0:
             QMessageBox.warning(self, "Cantidad", "Cantidad inválida")
             return
@@ -187,10 +273,13 @@ class FormularioPOS(QDialog):
                 "codigo": self._ultimo_producto["codigo"],
                 "nombre": self._ultimo_producto["nombre"],
                 "cantidad": cant,
-                "precio_unitario": self._ultimo_producto["precio"]
+                "precio_unitario": self._ultimo_producto.get("precio", 0)
             })
         QApplication.beep()
         self._refrescar_carrito()
+        if clear_search:
+            self.input_buscar.clear()
+            # 👇 no resetear self._ultimo_producto, así se puede usar en próximos escaneos
 
     def _refrescar_carrito(self):
         self.table_cart.setRowCount(len(self.cart))
@@ -204,6 +293,7 @@ class FormularioPOS(QDialog):
         self.lbl_total.setText(f"Total: ${total:,.2f}")
         self._calcular_vuelto()
 
+    # ---------------- Pago ----------------
     def _on_pago_change(self):
         tipo = self.combo_pago.currentText()
         if tipo == "Efectivo":
@@ -244,7 +334,6 @@ class FormularioPOS(QDialog):
             QMessageBox.warning(self, "Efectivo", "Monto recibido inválido")
             return
 
-        # obtener cliente seleccionado (puede ser None)
         cliente_id = self.combo_cliente.currentData()
         if tipo_pago == "Pendiente" and cliente_id is None:
             QMessageBox.warning(self, "Cliente requerido", "Debés seleccionar un cliente para ventas pendientes (fiado).")
@@ -263,3 +352,27 @@ class FormularioPOS(QDialog):
 
     def obtener_carrito(self):
         return self.cart
+
+    def _buscar_si_completo(self, texto: str):
+        texto = texto.strip()
+        if len(texto) >= 6:
+            self._buscar_producto()
+    
+    def agregar_producto_externo(self, prod):
+        try:
+            pid, codigo, nombre, cantidad, costo, sector, precio, codigo_barras, movs = prod
+            if int(cantidad) > 0:
+                self._ultimo_producto = {
+                    "id": pid, "codigo": codigo, "nombre": nombre,
+                    "stock": int(cantidad), "precio": float(precio)
+                }
+                self._agregar_al_carrito(cant_override=1, clear_search=False)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"No se pudo agregar producto: {e}")
+    
+        def showEvent(self, e):   ### NUEVO
+            super().showEvent(e)
+            # aseguramos que siempre tome el foco al mostrarse
+            self.activateWindow()
+            self.raise_()
+            self.input_buscar.setFocus()

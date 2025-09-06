@@ -6,20 +6,22 @@ from PySide6.QtWidgets import (
     QComboBox, QFormLayout
 )
 from PySide6.QtGui import QAction, QColor, QKeySequence
-from PySide6.QtCore import Qt, QDate
+from PySide6.QtCore import Qt, QDate, QTimer
 import pandas as pd
 import database
 from ui_formulario import FormularioProducto
 from ui_vender import FormularioPOS
-from datetime import datetime
 import os
 import shutil
+from PySide6.QtCore import QTimer
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Gestor de Stock - Almacén (Fase 2)")
         self.resize(1200, 650)
+        self._pos_dialog = None
 
         # toolbar
         toolbar = QToolBar("Principal")
@@ -111,24 +113,66 @@ class MainWindow(QMainWindow):
         self.act_editar.setShortcut(QKeySequence("F3"))
         self.act_eliminar.setShortcut(QKeySequence("Delete"))
 
+        # --- SCANNER ---
+        self._scan_timer = QTimer(self)
+        self._scan_timer.setSingleShot(True)
+        self._scan_timer.timeout.connect(self._procesar_scanner)
+        # cuando cambia el texto, reiniciamos el timer
+        self.input_buscar.textChanged.connect(self._on_scanner_text_changed)
+
     # -------------------------
-    # Helper Excel (formato tabla: encabezado gris, bordes, autoancho)
+    # SCANNER
     # -------------------------
-    def formatear_hoja_excel(self, writer, sheet_name, df):
-        ws = writer.sheets[sheet_name]
-        wb = writer.book
-        header_fmt = wb.add_format({"bold": True, "bg_color": "#DDDDDD", "border": 1})
-        cell_fmt = wb.add_format({"border": 1})
-        for c, col in enumerate(df.columns):
-            try:
-                max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
-            except Exception:
-                max_len = len(col) + 2
-            ws.set_column(c, c, max_len)
-            ws.write(0, c, col, header_fmt)
-        for r in range(1, len(df) + 1):
-            for c in range(len(df.columns)):
-                ws.write(r, c, df.iloc[r - 1, c], cell_fmt)
+    def _on_scanner_text_changed(self, texto):
+        if texto.strip():
+            # esperamos un poquito a que el lector termine de "escribir"
+            self._scan_timer.start(250)
+
+    def _procesar_scanner(self):
+        codigo = self.input_buscar.text().strip()
+        if not codigo:
+            return
+        self.input_buscar.clear()
+        self.input_buscar.setFocus()
+        self.escanear_codigo(codigo)
+
+    def escanear_codigo(self, codigo):
+        # Buscar producto por barcode o código interno
+        prod = database.obtener_producto_por_barcode(codigo)
+        if not prod:
+            for p in database.obtener_productos():
+                pid, cod, nombre, cantidad, costo, sector, precio, codigo_barras, movs = p
+                if str(cod).strip().lower() == codigo.lower():
+                    prod = p
+                    break
+
+        if prod:
+            if not self._pos_dialog or not self._pos_dialog.isVisible():
+                # Abrir POS en modo no bloqueante
+                self._pos_dialog = FormularioPOS(self, producto_preseleccionado=prod)
+                # cuando se cierre el POS, devolver foco al buscador principal
+                self._pos_dialog.finished.connect(lambda _: self.input_buscar.setFocus())  ### NUEVO
+
+                self._pos_dialog.open()
+
+                # aseguramos que el POS tome foco y reciba el escaneo
+                QTimer.singleShot(0, lambda: (   ### NUEVO
+                    self._pos_dialog.activateWindow(),
+                    self._pos_dialog.raise_(),
+                    self._pos_dialog.input_buscar.setFocus()
+                ))
+            else:
+                # Ya hay un POS abierto → agregar directo al carrito
+                self._pos_dialog.agregar_producto_externo(prod)
+        else:
+            # Producto no existe → abrir formulario de alta
+            form = FormularioProducto(self, codigo_barras=codigo)
+            if form.exec():
+                self.actualizar_tabla()
+                self.actualizar_historial()
+                self.aplicar_filtros()
+                self.status.showMessage("➕ Producto nuevo agregado", 4000)
+
 
     # -------------------------
     # tabla productos (igual que antes)
@@ -351,6 +395,25 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo importar: {e}")
+
+    # -------------------------
+    # Helper Excel (formato tabla: encabezado gris, bordes, autoancho)
+    # -------------------------
+    def formatear_hoja_excel(self, writer, sheet_name, df):
+        ws = writer.sheets[sheet_name]
+        wb = writer.book
+        header_fmt = wb.add_format({"bold": True, "bg_color": "#DDDDDD", "border": 1})
+        cell_fmt = wb.add_format({"border": 1})
+        for c, col in enumerate(df.columns):
+            try:
+                max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
+            except Exception:
+                max_len = len(col) + 2
+            ws.set_column(c, c, max_len)
+            ws.write(0, c, col, header_fmt)
+        for r in range(1, len(df) + 1):
+            for c in range(len(df.columns)):
+                ws.write(r, c, df.iloc[r - 1, c], cell_fmt)
 
     # -------------------------
     # Reportes - ventas agrupadas por tipo de pago (formato mejorado)
@@ -715,12 +778,13 @@ class MainWindow(QMainWindow):
                 return
             # pedir al usuario qué venta cobrar (si hay varias) - simple: mostrar ids
             opciones = [f"ID {v[0]} - {v[1]} - ${v[4]:,.2f}" for v in ventas_cliente]
+            from PySide6.QtWidgets import QInputDialog  # import local
             sel, ok = QInputDialog.getItem(self, "Seleccionar venta", "Ventas pendientes:", opciones, 0, False)
             if not ok:
                 return
             idx = opciones.index(sel)
             venta_id = ventas_cliente[idx][0]
-            total = ventas_cliente[idx][2]
+            total = ventas_cliente[idx][4]
 
             # diálogo cobro
             d = QDialog(self)
@@ -756,7 +820,6 @@ class MainWindow(QMainWindow):
                 else:
                     QMessageBox.critical(self, "Error", msg)
 
-        from PySide6.QtWidgets import QInputDialog  # import local
         btn_ver.clicked.connect(ver_ventas)
         btn_cobrar.clicked.connect(cobrar)
         btn_close.clicked.connect(dlg.reject)
