@@ -135,7 +135,7 @@ class MainWindow(QMainWindow):
         self.input_buscar.clear()
         self.input_buscar.setFocus()
         self.escanear_codigo(codigo)
-
+                   
     def escanear_codigo(self, codigo):
         # Buscar producto por barcode o código interno
         prod = database.obtener_producto_por_barcode(codigo)
@@ -150,13 +150,21 @@ class MainWindow(QMainWindow):
             if not self._pos_dialog or not self._pos_dialog.isVisible():
                 # Abrir POS en modo no bloqueante
                 self._pos_dialog = FormularioPOS(self, producto_preseleccionado=prod)
-                # cuando se cierre el POS, devolver foco al buscador principal
-                self._pos_dialog.finished.connect(lambda _: self.input_buscar.setFocus())  ### NUEVO
+
+                # cuando se cierre el POS, refrescar todo y resetear variable
+                self._pos_dialog.finished.connect(lambda _: (
+                    self.actualizar_tabla(),
+                    self.actualizar_historial(),
+                    self.aplicar_filtros(),
+                    self.input_buscar.setFocus(),
+                    self.status.showMessage("🛒 Venta registrada", 5000),
+                    setattr(self, "_pos_dialog", None)   # 👈 importante
+                ))
 
                 self._pos_dialog.open()
 
                 # aseguramos que el POS tome foco y reciba el escaneo
-                QTimer.singleShot(0, lambda: (   ### NUEVO
+                QTimer.singleShot(0, lambda: (
                     self._pos_dialog.activateWindow(),
                     self._pos_dialog.raise_(),
                     self._pos_dialog.input_buscar.setFocus()
@@ -172,6 +180,8 @@ class MainWindow(QMainWindow):
                 self.actualizar_historial()
                 self.aplicar_filtros()
                 self.status.showMessage("➕ Producto nuevo agregado", 4000)
+
+
 
 
     # -------------------------
@@ -511,44 +521,118 @@ class MainWindow(QMainWindow):
     def abrir_reembolsos(self):
         dlg = QDialog(self)
         dlg.setWindowTitle("Reembolsos - Seleccionar venta")
-        vbox = QVBoxLayout(dlg)
-        vbox.addWidget(QLabel("Listado de ventas recientes:"))
-        table = QTableWidget()
-        table.setColumnCount(5)
-        table.setHorizontalHeaderLabels(["ID", "Fecha", "TipoPago", "Estado", "Total"])
-        ventas = database.obtener_ventas()
-        table.setRowCount(len(ventas))
-        for r, v in enumerate(ventas):
-            table.setItem(r,0, QTableWidgetItem(str(v[0])))
-            table.setItem(r,1, QTableWidgetItem(str(v[1])))
-            table.setItem(r,2, QTableWidgetItem(str(v[2])))
-            table.setItem(r,3, QTableWidgetItem(str(v[3])))
-            table.setItem(r,4, QTableWidgetItem(str(v[4])))
-        vbox.addWidget(table)
-        btns = QHBoxLayout()
-        btn_reemb = QPushButton("↩️ Reembolsar venta seleccionada")
-        btn_cancel = QPushButton("Cerrar")
-        btns.addWidget(btn_reemb); btns.addWidget(btn_cancel)
-        vbox.addLayout(btns)
-        dlg.setLayout(vbox)
+        layout = QHBoxLayout(dlg)
 
-        def on_reembolsar():
-            r = table.currentRow()
-            if r < 0:
-                QMessageBox.warning(self, "Seleccionar", "Seleccioná una venta")
+        # --- Panel de ventas ---
+        vbox_ventas = QVBoxLayout()
+        vbox_ventas.addWidget(QLabel("Ventas recientes:"))
+        table_ventas = QTableWidget()
+        table_ventas.setColumnCount(5)
+        table_ventas.setHorizontalHeaderLabels(["ID", "Fecha", "TipoPago", "Estado", "Total"])
+        ventas = database.obtener_ventas()
+        table_ventas.setRowCount(len(ventas))
+        for r, v in enumerate(ventas):
+            table_ventas.setItem(r,0, QTableWidgetItem(str(v[0])))
+            table_ventas.setItem(r,1, QTableWidgetItem(str(v[1])))
+            table_ventas.setItem(r,2, QTableWidgetItem(str(v[2])))
+            table_ventas.setItem(r,3, QTableWidgetItem(str(v[3])))
+            table_ventas.setItem(r,4, QTableWidgetItem(str(v[4])))
+        vbox_ventas.addWidget(table_ventas)
+        layout.addLayout(vbox_ventas, stretch=1)
+
+        # --- Panel de items ---
+        vbox_items = QVBoxLayout()
+        vbox_items.addWidget(QLabel("Items de la venta seleccionada:"))
+        table_items = QTableWidget()
+        table_items.setColumnCount(5)
+        table_items.setHorizontalHeaderLabels(["ID Item", "Producto", "Cantidad", "Precio Unitario", "Subtotal"])
+        vbox_items.addWidget(table_items)
+
+        # Resumen de devolución
+        lbl_resumen = QLabel("💰 Total a devolver: $0.00")
+        lbl_resumen.setStyleSheet("font-weight: bold; font-size: 14px; color: darkred;")
+        vbox_items.addWidget(lbl_resumen)
+
+        layout.addLayout(vbox_items, stretch=2)
+
+        # --- Botones ---
+        btns = QHBoxLayout()
+        btn_reemb_all = QPushButton("↩️ Reembolsar venta completa")
+        btn_reemb_sel = QPushButton("↩️ Reembolsar ítems seleccionados")
+        btn_cancel = QPushButton("❌ Cancelar")
+        btns.addWidget(btn_reemb_all); btns.addWidget(btn_reemb_sel); btns.addWidget(btn_cancel)
+        vbox_items.addLayout(btns)
+
+        # --- Funciones internas ---
+        def cargar_items():
+            r = table_ventas.currentRow()
+            if r < 0: 
                 return
-            venta_id = int(table.item(r,0).text())
+            venta_id = int(table_ventas.item(r,0).text())
+            items = database.obtener_items_venta(venta_id)
+            table_items.setRowCount(len(items))
+            for i, it in enumerate(items):
+                vi_id, pid, nombre, cant, precio_unit, subtotal = it
+                table_items.setItem(i,0, QTableWidgetItem(str(vi_id)))
+                table_items.setItem(i,1, QTableWidgetItem(nombre))
+                table_items.setItem(i,2, QTableWidgetItem(str(cant)))
+                table_items.setItem(i,3, QTableWidgetItem(f"${precio_unit:.2f}"))
+                table_items.setItem(i,4, QTableWidgetItem(f"${subtotal:.2f}"))
+            actualizar_resumen()
+
+        def actualizar_resumen():
+            total = 0.0
+            for i in range(table_items.rowCount()):
+                if table_items.item(i,0) and table_items.item(i,0).isSelected():
+                    try:
+                        val = table_items.item(i,4).text().replace("$","").replace(",","")
+                        total += float(val)
+                    except:
+                        pass
+            lbl_resumen.setText(f"💰 Total a devolver: ${total:,.2f}")
+
+        def reembolsar_todo():
+            r = table_ventas.currentRow()
+            if r < 0:
+                QMessageBox.warning(dlg, "Seleccionar", "Seleccioná una venta")
+                return
+            venta_id = int(table_ventas.item(r,0).text())
             ok, msg = database.reembolsar_venta(venta_id)
             if ok:
-                QMessageBox.information(self, "Reembolso", msg)
+                QMessageBox.information(dlg, "Reembolso", msg)
                 self.actualizar_tabla()
                 self.actualizar_historial()
                 dlg.accept()
             else:
-                QMessageBox.critical(self, "Error", msg)
+                QMessageBox.critical(dlg, "Error", msg)
 
-        btn_reemb.clicked.connect(on_reembolsar)
+        def reembolsar_items():
+            r = table_ventas.currentRow()
+            if r < 0:
+                QMessageBox.warning(dlg, "Seleccionar", "Seleccioná una venta")
+                return
+            venta_id = int(table_ventas.item(r,0).text())
+            seleccionados = [table_items.item(i,0).text() for i in range(table_items.rowCount()) if table_items.item(i,0).isSelected()]
+            if not seleccionados:
+                QMessageBox.warning(dlg, "Seleccionar", "Seleccioná al menos un ítem")
+                return
+            seleccionados = list(map(int, seleccionados))
+            ok, msg = database.reembolsar_venta(venta_id, items_to_refund=seleccionados)
+            if ok:
+                QMessageBox.information(dlg, "Reembolso", msg)
+                self.actualizar_tabla()
+                self.actualizar_historial()
+                dlg.accept()
+            else:
+                QMessageBox.critical(dlg, "Error", msg)
+
+        # --- Conexiones ---
+        table_ventas.itemSelectionChanged.connect(cargar_items)
+        table_items.itemSelectionChanged.connect(actualizar_resumen)
+        btn_reemb_all.clicked.connect(reembolsar_todo)
+        btn_reemb_sel.clicked.connect(reembolsar_items)
         btn_cancel.clicked.connect(dlg.reject)
+
         dlg.exec()
 
     # -------------------------

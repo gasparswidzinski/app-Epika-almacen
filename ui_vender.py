@@ -359,20 +359,25 @@ class FormularioPOS(QDialog):
             self._buscar_producto()
     
     def agregar_producto_externo(self, prod):
+        """
+        Permite que MainWindow agregue un producto al carrito cuando ya hay un POS abierto.
+        'prod' es la tupla del producto que viene de database.obtener_productos().
+        """
         try:
             pid, codigo, nombre, cantidad, costo, sector, precio, codigo_barras, movs = prod
-            if int(cantidad) > 0:
-                self._ultimo_producto = {
-                    "id": pid, "codigo": codigo, "nombre": nombre,
-                    "stock": int(cantidad), "precio": float(precio)
-                }
-                self._agregar_al_carrito(cant_override=1, clear_search=False)
+            if int(cantidad) <= 0:
+                QMessageBox.warning(self, "Stock", f"Stock insuficiente para {nombre}")
+                return
+
+            self._ultimo_producto = {
+                "id": pid,
+                "codigo": codigo,
+                "nombre": nombre,
+                "stock": int(cantidad),
+                "precio": float(precio)
+            }
+            # Agregamos al carrito directamente (1 unidad)
+            self._agregar_al_carrito(cant_override=1, clear_search=True)
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"No se pudo agregar producto: {e}")
-    
-        def showEvent(self, e):   ### NUEVO
-            super().showEvent(e)
-            # aseguramos que siempre tome el foco al mostrarse
-            self.activateWindow()
-            self.raise_()
-            self.input_buscar.setFocus()
+            QMessageBox.critical(self, "Error", f"No se pudo agregar producto externo:\n{e}")
+

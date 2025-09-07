@@ -527,27 +527,45 @@ def reembolsar_venta(venta_id, items_to_refund=None):
             items = cur.fetchall()
         else:
             placeholders = ",".join("?" for _ in items_to_refund)
-            cur.execute(f"SELECT id, producto_id, cantidad, precio_unitario, subtotal FROM venta_items WHERE id IN ({placeholders})", tuple(items_to_refund))
+            cur.execute(
+                f"SELECT id, producto_id, cantidad, precio_unitario, subtotal FROM venta_items WHERE id IN ({placeholders})",
+                tuple(items_to_refund)
+            )
             items = cur.fetchall()
 
         fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        total_devuelto = 0.0
 
         for itm in items:
             vi_id, pid, cant, precio_unit, subtotal = itm
+            total_devuelto += subtotal
+
+            # Reponer stock
             cur.execute("SELECT cantidad FROM productos WHERE id=?", (pid,))
             row = cur.fetchone()
             current = row[0] if row else 0
             cur.execute("UPDATE productos SET cantidad=? WHERE id=?", (current + cant, pid))
-            cur.execute("INSERT INTO movimientos (producto_id, tipo, cambio, precio_unitario, fecha, detalles) VALUES (?, ?, ?, ?, ?, ?)",
-                        (pid, "REEMBOLSO", cant, precio_unit, fecha, f"Reembolso de venta {venta_id}"))
+
+            # Registrar movimiento
+            cur.execute(
+                "INSERT INTO movimientos (producto_id, tipo, cambio, precio_unitario, fecha, detalles) VALUES (?, ?, ?, ?, ?, ?)",
+                (pid, "REEMBOLSO", cant, precio_unit, fecha, f"Reembolso de venta {venta_id}")
+            )
+
+            # Eliminar el ítem de la venta
+            cur.execute("DELETE FROM venta_items WHERE id=?", (vi_id,))
+
+        # Actualizar total de la venta
+        cur.execute("UPDATE ventas SET total = total - ? WHERE id=?", (total_devuelto, venta_id))
 
         conn.commit()
         conn.close()
-        return True, "Reembolso procesado"
+        return True, f"Reembolso procesado. Total devuelto: ${total_devuelto:,.2f}"
     except Exception as e:
         conn.rollback()
         conn.close()
         return False, str(e)
+
 
 # -----------------------------
 # Reportes: ventas agrupadas por tipo de pago
