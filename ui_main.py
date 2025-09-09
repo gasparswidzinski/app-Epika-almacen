@@ -68,6 +68,7 @@ class MainWindow(QMainWindow):
         self.table.setAlternatingRowColors(True)
         left_layout.addWidget(self.table)
 
+
         main_layout.addLayout(left_layout, stretch=3)
 
         # right panel - historial
@@ -106,6 +107,13 @@ class MainWindow(QMainWindow):
 
         self.input_buscar.textChanged.connect(self.aplicar_filtros)
         self.chk_bajo_stock.toggled.connect(self.aplicar_filtros)
+        
+        self.act_gastos = QAction("💵 Gastos", self)
+        toolbar.addAction(self.act_gastos)
+        self.act_gastos.triggered.connect(self.abrir_gastos)
+
+        
+        
 
         # atajos
         self.act_agregar.setShortcut(QKeySequence("F1"))
@@ -907,4 +915,133 @@ class MainWindow(QMainWindow):
         btn_ver.clicked.connect(ver_ventas)
         btn_cobrar.clicked.connect(cobrar)
         btn_close.clicked.connect(dlg.reject)
+        dlg.exec()
+    
+    def abrir_gastos(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Gestión de Gastos")
+        layout = QVBoxLayout(dlg)
+
+        # --- Selector de tipo ---
+        tipo_layout = QHBoxLayout()
+        tipo_layout.addWidget(QLabel("Tipo de gasto:"))
+        combo_tipo = QComboBox()
+        combo_tipo.addItems(["almacen", "personal"])
+        tipo_layout.addWidget(combo_tipo)
+        layout.addLayout(tipo_layout)
+
+        # --- Formulario de gasto ---
+        form_layout = QHBoxLayout()
+        combo_cat = QComboBox()
+        combo_cat.addItems(["Proveedores", "Sueldos", "Alquiler", "Luz",
+                            "Impuestos", "Contador", "Agua", "Otros"])
+        form_layout.addWidget(combo_cat)
+
+        inp_monto = QLineEdit()
+        inp_monto.setPlaceholderText("Monto")
+        form_layout.addWidget(inp_monto)
+
+        inp_detalle = QLineEdit()
+        inp_detalle.setPlaceholderText("Detalle (opcional)")
+        form_layout.addWidget(inp_detalle)
+
+        btn_add = QPushButton("➕ Agregar")
+        form_layout.addWidget(btn_add)
+        layout.addLayout(form_layout)
+
+        # --- Selector de fechas ---
+        fechas_layout = QHBoxLayout()
+        fechas_layout.addWidget(QLabel("Desde:"))
+        date_inicio = QDateEdit()
+        date_inicio.setCalendarPopup(True)
+        date_inicio.setDisplayFormat("yyyy-MM-dd")
+        # Primer día del mes actual
+        hoy = QDate.currentDate()
+        primer_dia_mes = QDate(hoy.year(), hoy.month(), 1)
+        date_inicio.setDate(primer_dia_mes)
+        fechas_layout.addWidget(date_inicio)
+
+        fechas_layout.addWidget(QLabel("Hasta:"))
+        date_fin = QDateEdit()
+        date_fin.setCalendarPopup(True)
+        date_fin.setDisplayFormat("yyyy-MM-dd")
+        # Fecha actual
+        date_fin.setDate(hoy)
+        fechas_layout.addWidget(date_fin)
+
+        layout.addLayout(fechas_layout)
+        
+        # --- Tabla de gastos ---
+        table = QTableWidget()
+        table.setColumnCount(4)
+        table.setHorizontalHeaderLabels(["Fecha", "Categoría", "Monto", "Detalle"])
+        layout.addWidget(table)
+        # --- Botones ---
+        btns = QHBoxLayout()
+        btn_del = QPushButton("🗑️ Eliminar seleccionado")
+        btn_export = QPushButton("📊 Exportar a Excel")
+        btns.addWidget(btn_del)
+        btns.addWidget(btn_export)
+        layout.addLayout(btns)
+
+        # --- Funciones internas ---
+        def cargar():
+            gastos = database.obtener_gastos(combo_tipo.currentText())
+            table.setRowCount(len(gastos))
+            for i, g in enumerate(gastos):
+                gid, fecha, cat, monto, detalle = g
+                table.setItem(i, 0, QTableWidgetItem(fecha))
+                table.setItem(i, 1, QTableWidgetItem(cat))
+                table.setItem(i, 2, QTableWidgetItem(f"${monto:.2f}"))
+                table.setItem(i, 3, QTableWidgetItem(detalle or ""))
+
+        def agregar():
+            try:
+                categoria = combo_cat.currentText()
+                monto = float(inp_monto.text())
+                detalle = inp_detalle.text().strip()
+                database.agregar_gasto(categoria, monto, detalle, combo_tipo.currentText())
+                cargar()
+                inp_monto.clear()
+                inp_detalle.clear()
+            except Exception as e:
+                QMessageBox.critical(dlg, "Error", f"No se pudo agregar gasto:\n{e}")
+
+        def eliminar():
+            row = table.currentRow()
+            if row < 0:
+                return
+            gid = database.obtener_gastos(combo_tipo.currentText())[row][0]
+            database.eliminar_gasto(gid)
+            cargar()
+
+        def exportar():
+            from datetime import datetime
+            tipo = combo_tipo.currentText()
+            f1 = date_inicio.date().toString("yyyy-MM-dd") if date_inicio.date().isValid() else None
+            f2 = date_fin.date().toString("yyyy-MM-dd") if date_fin.date().isValid() else None
+
+            # Nombre automático del archivo
+            fecha_actual = datetime.now().strftime("%Y%m%d_%H%M")
+            rango_txt = ""
+            if f1 and f2:
+                rango_txt = f"_{f1}_a_{f2}"
+            elif f1:
+                rango_txt = f"_desde_{f1}"
+            elif f2:
+                rango_txt = f"_hasta_{f2}"
+
+            default_name = f"gastos_{tipo}{rango_txt}_{fecha_actual}.xlsx"
+
+            filename, _ = QFileDialog.getSaveFileName(dlg, "Guardar Excel", default_name, "Excel (*.xlsx)")
+            if filename:
+                path = database.exportar_gastos_excel(tipo, filename, fecha_inicio=f1, fecha_fin=f2)
+                QMessageBox.information(dlg, "Exportación exitosa", f"Archivo generado:\n{path}")
+
+        combo_tipo.currentIndexChanged.connect(cargar)
+        btn_add.clicked.connect(agregar)
+        btn_del.clicked.connect(eliminar)
+        btn_export.clicked.connect(exportar)
+
+        cargar()
         dlg.exec()

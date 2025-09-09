@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence
 import database
-
+import os
 
 class FormularioPOS(QDialog):
     def __init__(self, parent=None, producto_preseleccionado=None):
@@ -326,6 +326,7 @@ class FormularioPOS(QDialog):
         if not self.cart:
             QMessageBox.warning(self, "Carrito vacío", "Agregá productos antes de confirmar")
             return
+
         tipo_pago = self.combo_pago.currentText()
         recibido = None
         try:
@@ -339,16 +340,59 @@ class FormularioPOS(QDialog):
             QMessageBox.warning(self, "Cliente requerido", "Debés seleccionar un cliente para ventas pendientes (fiado).")
             return
 
-        items = [{"producto_id": it["producto_id"], "cantidad": it["cantidad"], "precio_unitario": it["precio_unitario"]} for it in self.cart]
+        items = [
+            {
+                "producto_id": it["producto_id"],
+                "cantidad": it["cantidad"],
+                "precio_unitario": it["precio_unitario"]
+            }
+            for it in self.cart
+        ]
+
         ok, res = database.registrar_venta(items, tipo_pago, cliente=cliente_id, efectivo_recibido=recibido)
         if ok:
             venta_id = res
             total = sum(it["cantidad"] * it["precio_unitario"] for it in self.cart)
             vuelto = (recibido - total) if recibido is not None else None
-            QMessageBox.information(self, "Venta registrada", f"Venta ID {venta_id} registrada.\nTotal: ${total:,.2f}\nTipo: {tipo_pago}\nVuelto: {vuelto if vuelto is not None else '-'}")
+
+            # Confirmación
+            QMessageBox.information(
+                self,
+                "Venta registrada",
+                f"Venta ID {venta_id} registrada.\n"
+                f"Total: ${total:,.2f}\n"
+                f"Tipo: {tipo_pago}\n"
+                f"Vuelto: {vuelto if vuelto is not None else '-'}"
+            )
+
+            # ¿Imprimir ticket?
+            reply = QMessageBox.question(
+                self,
+                "Imprimir Ticket",
+                "¿Querés imprimir el ticket de esta venta?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                ruta = database.generar_ticket(venta_id, formato="termico")  # 58 mm
+                if ruta:
+                    try:
+                        import os
+                        if os.name == "nt":  # Windows
+                            os.startfile(ruta, "print")
+                        else:  # Linux / macOS
+                            os.system(f"lp '{ruta}'")
+                    except Exception as e:
+                        QMessageBox.warning(
+                            self,
+                            "Ticket",
+                            f"Ticket guardado en {ruta}\nNo se pudo imprimir automáticamente:\n{e}"
+                        )
+
             self.accept()
         else:
             QMessageBox.critical(self, "Error al vender", f"No se pudo registrar: {res}")
+
+        
 
     def obtener_carrito(self):
         return self.cart

@@ -1,6 +1,18 @@
 # database.py
 import sqlite3
 from datetime import datetime
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side, numbers
+from openpyxl.chart import PieChart, Reference
+from openpyxl.utils import get_column_letter
+from openpyxl.chart.label import DataLabelList
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.pdfgen import canvas
+from datetime import datetime
+import os
+
+
 
 DB_NAME = "almacen.db"
 
@@ -127,6 +139,19 @@ def inicializar_db():
             cur.execute("INSERT INTO sectores (nombre, margen) VALUES (?, ?)", (nombre, margen))
         except sqlite3.IntegrityError:
             pass
+
+    # Tabla gastos (almacén y personal)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS gastos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fecha TEXT NOT NULL,
+        categoria TEXT NOT NULL,
+        monto REAL NOT NULL,
+        detalle TEXT,
+        tipo TEXT NOT NULL CHECK(tipo IN ('almacen','personal'))
+    )
+    """)
+
 
     conn.commit()
     conn.close()
@@ -649,3 +674,318 @@ def obtener_producto_por_barcode(codigo_barras):
     conn.close()
     return prod
 
+# -----------------------------
+# GASTOS (Almacén y Personales)
+# -----------------------------
+def agregar_gasto(categoria, monto, detalle="", tipo="almacen"):
+    conn = get_connection()
+    cur = conn.cursor()
+    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cur.execute("""
+        INSERT INTO gastos (fecha, categoria, monto, detalle, tipo)
+        VALUES (?, ?, ?, ?, ?)
+    """, (fecha, categoria, monto, detalle, tipo))
+    conn.commit()
+    conn.close()
+
+def obtener_gastos(tipo="almacen", fecha_inicio=None, fecha_fin=None):
+    conn = get_connection()
+    cur = conn.cursor()
+    query = "SELECT id, fecha, categoria, monto, detalle FROM gastos WHERE tipo=?"
+    params = [tipo]
+
+    if fecha_inicio and fecha_fin:
+        query += " AND date(fecha) BETWEEN date(?) AND date(?)"
+        params.extend([fecha_inicio, fecha_fin])
+    elif fecha_inicio:
+        query += " AND date(fecha) >= date(?)"
+        params.append(fecha_inicio)
+    elif fecha_fin:
+        query += " AND date(fecha) <= date(?)"
+        params.append(fecha_fin)
+
+    query += " ORDER BY fecha DESC"
+    cur.execute(query, tuple(params))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+def obtener_resumen_gastos(tipo="almacen", fecha_inicio=None, fecha_fin=None):
+    conn = get_connection()
+    cur = conn.cursor()
+    query = "SELECT categoria, SUM(monto) FROM gastos WHERE tipo=?"
+    params = [tipo]
+
+    if fecha_inicio and fecha_fin:
+        query += " AND date(fecha) BETWEEN date(?) AND date(?)"
+        params.extend([fecha_inicio, fecha_fin])
+    elif fecha_inicio:
+        query += " AND date(fecha) >= date(?)"
+        params.append(fecha_inicio)
+    elif fecha_fin:
+        query += " AND date(fecha) <= date(?)"
+        params.append(fecha_fin)
+
+    query += " GROUP BY categoria ORDER BY SUM(monto) DESC"
+    cur.execute(query, tuple(params))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+def eliminar_gasto(gasto_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM gastos WHERE id=?", (gasto_id,))
+    conn.commit()
+    conn.close()
+
+
+def exportar_gastos_excel(tipo="almacen", filename="gastos.xlsx", fecha_inicio=None, fecha_fin=None):
+    gastos = obtener_gastos(tipo, fecha_inicio, fecha_fin)
+    resumen = obtener_resumen_gastos(tipo, fecha_inicio, fecha_fin)
+
+    wb = Workbook()
+
+    # === Hoja Detalle ===
+    ws1 = wb.active
+    ws1.title = "Detalle"
+
+    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'),
+                         top=Side(style='thin'), bottom=Side(style='thin'))
+
+    # Encabezado
+    ws1.merge_cells("A1:E1")
+    rango_txt = ""
+    if fecha_inicio and fecha_fin:
+        rango_txt = f" ({fecha_inicio} a {fecha_fin})"
+    elif fecha_inicio:
+        rango_txt = f" (desde {fecha_inicio})"
+    elif fecha_fin:
+        rango_txt = f" (hasta {fecha_fin})"
+    ws1["A1"] = f"Reporte de gastos - {tipo.capitalize()}{rango_txt}"
+    ws1["A1"].font = Font(size=16, bold=True, color="1F497D")
+    ws1["A1"].alignment = Alignment(horizontal="center")
+
+    # Encabezados de tabla
+    headers = ["ID", "Fecha", "Categoría", "Monto", "Detalle"]
+    ws1.append(headers)
+    for col in range(1, len(headers) + 1):
+        cell = ws1.cell(row=2, column=col)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = thin_border
+        ws1.column_dimensions[get_column_letter(col)].width = 20
+
+    # Datos
+    for g in gastos:
+        ws1.append(g)
+
+    # Formato y bordes
+    for row in ws1.iter_rows(min_row=3, max_row=ws1.max_row, min_col=1, max_col=5):
+        for cell in row:
+            cell.border = thin_border
+            if cell.column == 4:  # monto
+                cell.number_format = numbers.FORMAT_CURRENCY_USD_SIMPLE
+
+    # Total General en Detalle
+    total_detalle = sum(g[3] for g in gastos) if gastos else 0
+    total_row = ws1.max_row + 2
+    ws1["C{}".format(total_row)] = "TOTAL GENERAL"
+    ws1["C{}".format(total_row)].font = Font(bold=True, color="C00000")
+    ws1["D{}".format(total_row)] = total_detalle
+    ws1["D{}".format(total_row)].number_format = numbers.FORMAT_CURRENCY_USD_SIMPLE
+    ws1["D{}".format(total_row)].font = Font(bold=True, color="C00000")
+
+    # === Hoja Resumen ===
+    ws2 = wb.create_sheet(title="Resumen")
+
+    ws2.merge_cells("A1:C1")
+    ws2["A1"] = f"Resumen de gastos - {tipo.capitalize()}{rango_txt}"
+    ws2["A1"].font = Font(size=16, bold=True, color="1F497D")
+    ws2["A1"].alignment = Alignment(horizontal="center")
+
+    ws2.append(["Categoría", "Total"])
+    for col in range(1, 3):
+        cell = ws2.cell(row=2, column=col)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill(start_color="9BBB59", end_color="9BBB59", fill_type="solid")
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = thin_border
+        ws2.column_dimensions[get_column_letter(col)].width = 25
+
+    total_general = 0
+    for r in resumen:
+        ws2.append(r)
+        total_general += r[1]
+
+    for row in ws2.iter_rows(min_row=3, max_row=ws2.max_row, min_col=1, max_col=2):
+        for cell in row:
+            cell.border = thin_border
+            if cell.column == 2:
+                cell.number_format = numbers.FORMAT_CURRENCY_USD_SIMPLE
+
+    # Total general en Resumen
+    ws2["A{}".format(ws2.max_row + 2)] = "TOTAL GENERAL"
+    ws2["A{}".format(ws2.max_row)].font = Font(bold=True, color="C00000")
+    ws2["B{}".format(ws2.max_row)] = total_general
+    ws2["B{}".format(ws2.max_row)].number_format = numbers.FORMAT_CURRENCY_USD_SIMPLE
+    ws2["B{}".format(ws2.max_row)].font = Font(bold=True, color="C00000")
+
+    # Gráfico circular
+    if ws2.max_row > 3:
+        pie = PieChart()
+        pie.title = f"Gastos por categoría ({tipo})"
+        labels = Reference(ws2, min_col=1, min_row=3, max_row=ws2.max_row - 2)
+        data = Reference(ws2, min_col=2, min_row=2, max_row=ws2.max_row - 2)
+        pie.add_data(data, titles_from_data=True)
+        pie.set_categories(labels)
+        pie.height = 12
+        pie.width = 12
+
+        # Crear etiquetas de datos si no existen
+        pie.dataLabels = DataLabelList()
+        pie.dataLabels.showPercent = True
+        pie.dataLabels.showCategory = True
+
+        ws2.add_chart(pie, "D4")
+
+    wb.save(filename)
+    return filename
+
+# --------- Tickets ---------
+
+# Elegí el formato por defecto: "termico" (58 mm) o "a4"
+FORMATO_TICKET = "termico"
+
+def _datos_venta_y_items(venta_id):
+    """Devuelve (venta, items) con nombre de cliente ya resuelto."""
+    conn = get_connection()
+    cur = conn.cursor()
+    # Traemos la venta y el nombre del cliente (si existe)
+    cur.execute("""
+        SELECT v.fecha, v.tipo_pago, v.total, v.efectivo_recibido, v.vuelto,
+               COALESCE(c.nombre, 'Consumidor Final') AS cliente_nombre
+        FROM ventas v
+        LEFT JOIN clientes c ON c.id = v.cliente
+        WHERE v.id = ?
+    """, (venta_id,))
+    venta = cur.fetchone()
+    if not venta:
+        conn.close()
+        return None, None
+
+    # Traemos items con nombre de producto
+    cur.execute("""
+        SELECT p.nombre, vi.cantidad, vi.precio_unitario, vi.subtotal
+        FROM venta_items vi
+        JOIN productos p ON p.id = vi.producto_id
+        WHERE vi.venta_id = ?
+    """, (venta_id,))
+    items = cur.fetchall()
+    conn.close()
+    return venta, items
+
+def generar_ticket_a4(venta_id, ruta):
+    venta, items = _datos_venta_y_items(venta_id)
+    if not venta:
+        return None
+
+    ancho, alto = A4
+    c = canvas.Canvas(ruta, pagesize=A4)
+    y = alto - 20*mm
+
+    c.setFont("Helvetica-Bold", 14)
+    c.drawCentredString(ancho/2, y, "Mi Almacén")
+    y -= 10*mm
+
+    c.setFont("Helvetica", 10)
+    c.drawString(20*mm, y, f"Fecha: {venta[0]}")
+    y -= 5*mm
+    c.drawString(20*mm, y, f"Cliente: {venta[5]}")
+    y -= 10*mm
+
+    c.drawString(20*mm, y, "Cant  Producto              P.Unit   Subtotal")
+    y -= 5*mm
+    for nombre, cant, precio, subtotal in items:
+        c.drawString(20*mm, y, f"{cant:>3}  {nombre[:20]:<20} {precio:>7.2f}  {subtotal:>7.2f}")
+        y -= 5*mm
+
+    y -= 10*mm
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(20*mm, y, f"TOTAL: ${venta[2]:.2f}")
+    y -= 7*mm
+    c.setFont("Helvetica", 10)
+    c.drawString(20*mm, y, f"Pago: {venta[1]}")
+    if venta[1] == "Efectivo":
+        y -= 5*mm
+        c.drawString(20*mm, y, f"Recibido: ${venta[3] or 0:.2f}  Vuelto: ${venta[4] or 0:.2f}")
+
+    c.save()
+    return ruta
+
+def generar_ticket_termico(venta_id, ruta):
+    """Ticket térmico 58 mm de ancho."""
+    venta, items = _datos_venta_y_items(venta_id)
+    if not venta:
+        return None
+
+    ancho = 58 * mm
+    alto = 200 * mm  # suficiente para ~30 líneas
+    c = canvas.Canvas(ruta, pagesize=(ancho, alto))
+    y = alto - 10 * mm
+
+    # Encabezado
+    c.setFont("Helvetica-Bold", 10)
+    c.drawCentredString(ancho/2, y, "Mi Almacén")
+    y -= 6 * mm
+
+    c.setFont("Helvetica", 7)
+    c.drawString(4 * mm, y, f"Fecha: {venta[0]}")
+    y -= 4 * mm
+    c.drawString(4 * mm, y, f"Cliente: {venta[5]}")
+    y -= 6 * mm
+
+    # Productos
+    c.setFont("Helvetica-Bold", 7)
+    c.drawString(4 * mm, y, "Cant Prod         Subtot")
+    y -= 4 * mm
+    c.setFont("Helvetica", 7)
+
+    for nombre, cant, precio, subtotal in items:
+        nombre_corto = (nombre[:10] + "...") if len(nombre) > 12 else nombre
+        c.drawString(4 * mm, y, f"{cant:>2}  {nombre_corto:<12} {subtotal:>6.2f}")
+        y -= 4 * mm
+
+    # Total y pago
+    y -= 4 * mm
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(4 * mm, y, f"TOTAL: ${venta[2]:.2f}")
+    y -= 5 * mm
+
+    c.setFont("Helvetica", 7)
+    c.drawString(4 * mm, y, f"Pago: {venta[1]}")
+    if venta[1] == "Efectivo":
+        y -= 4 * mm
+        c.drawString(4 * mm, y, f"Recibido: ${venta[3] or 0:.2f}")
+        y -= 4 * mm
+        c.drawString(4 * mm, y, f"Vuelto:   ${venta[4] or 0:.2f}")
+
+    # Mensaje final
+    y -= 8 * mm
+    c.setFont("Helvetica-Oblique", 7)
+    c.drawCentredString(ancho/2, y, "¡Gracias por su compra!")
+
+    c.save()
+    return ruta
+
+def generar_ticket(venta_id, formato=None):
+    """Wrapper: crea carpeta, arma ruta y delega según formato."""
+    os.makedirs("tickets", exist_ok=True)
+    ruta = os.path.join("tickets", f"ticket_{venta_id}.pdf")
+    fmt = (formato or FORMATO_TICKET).lower()
+
+    if fmt == "a4":
+        return generar_ticket_a4(venta_id, ruta)
+    else:
+        return generar_ticket_termico(venta_id, ruta)
