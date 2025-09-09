@@ -162,6 +162,37 @@ def inicializar_db():
         precio_unitario REAL
     )
     """)
+    
+        # Tabla categorías de gastos
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS categorias_gasto (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nombre TEXT UNIQUE NOT NULL,
+        tipo TEXT NOT NULL CHECK(tipo IN ('almacen','personal'))
+    )
+    """)
+
+    # Semillas de categorías de gastos (solo si no existen)
+    default_cats_almacen = [
+        "Proveedores", "Sueldos", "Alquiler", "Luz",
+        "Impuestos", "Contador", "Agua", "Otros"
+    ]
+    default_cats_personal = [
+        "Alquiler Vivienda", "Comida", "Transporte",
+        "Educación", "Salud", "Entretenimiento", "Otros"
+    ]
+
+    for nombre in default_cats_almacen:
+        try:
+            cur.execute("INSERT INTO categorias_gasto (nombre, tipo) VALUES (?, ?)", (nombre, "almacen"))
+        except sqlite3.IntegrityError:
+            pass
+
+    for nombre in default_cats_personal:
+        try:
+            cur.execute("INSERT INTO categorias_gasto (nombre, tipo) VALUES (?, ?)", (nombre, "personal"))
+        except sqlite3.IntegrityError:
+            pass
 
 
     conn.commit()
@@ -1031,3 +1062,30 @@ def limpiar_carrito_temporal():
     cursor.execute("DELETE FROM carrito_temporal")
     conn.commit()
     conn.close()
+    
+# -----------------------------
+# CATEGORÍAS DE GASTOS
+# -----------------------------
+def agregar_categoria_gasto(nombre, tipo="almacen"):
+    """Agrega una categoría de gasto si no existe."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS categorias_gasto (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT UNIQUE NOT NULL,
+            tipo TEXT NOT NULL CHECK(tipo IN ('almacen','personal'))
+        )
+    """)
+    cur.execute("INSERT OR IGNORE INTO categorias_gasto (nombre, tipo) VALUES (?, ?)", (nombre, tipo))
+    conn.commit()
+    conn.close()
+
+def obtener_categorias_gasto(tipo="almacen"):
+    """Devuelve lista de nombres de categorías según tipo."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT nombre FROM categorias_gasto WHERE tipo=? ORDER BY nombre", (tipo,))
+    rows = [r[0] for r in cur.fetchall()]
+    conn.close()
+    return rows

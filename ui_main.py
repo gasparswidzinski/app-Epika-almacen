@@ -14,6 +14,7 @@ from ui_vender import FormularioPOS
 import os
 import shutil
 from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QDialogButtonBox
 
 
 class MainWindow(QMainWindow):
@@ -42,6 +43,10 @@ class MainWindow(QMainWindow):
         self.act_clientes = QAction("👥 Clientes", self)
         self.act_pendientes = QAction("🧾 Ventas Pendientes", self)
         self.act_backup = QAction("💾 Backup", self)
+        
+        self.act_sectores = QAction("📂 Sectores", self)
+        toolbar.addAction(self.act_sectores)
+        self.act_sectores.triggered.connect(self.abrir_sectores)
 
         for act in [self.act_agregar, self.act_editar, self.act_eliminar,
                     self.act_vender, self.act_importar, self.act_exportar,
@@ -127,6 +132,8 @@ class MainWindow(QMainWindow):
         self._scan_timer.timeout.connect(self._procesar_scanner)
         # cuando cambia el texto, reiniciamos el timer
         self.input_buscar.textChanged.connect(self._on_scanner_text_changed)
+        
+        
 
     # -------------------------
     # SCANNER
@@ -963,9 +970,56 @@ class MainWindow(QMainWindow):
         # --- Formulario de gasto ---
         form_layout = QHBoxLayout()
         combo_cat = QComboBox()
-        combo_cat.addItems(["Proveedores", "Sueldos", "Alquiler", "Luz",
-                            "Impuestos", "Contador", "Agua", "Otros"])
+
+        # Categorías iniciales por tipo (fallback)
+        categorias_almacen = ["Proveedores", "Sueldos", "Alquiler", "Luz",
+                            "Impuestos", "Contador", "Agua", "Otros"]
+        categorias_personal = ["Alquiler Vivienda", "Comida", "Transporte",
+                            "Educación", "Salud", "Entretenimiento", "Otros"]
+
+        def actualizar_categorias():
+            combo_cat.clear()
+            cats = database.obtener_categorias_gasto(combo_tipo.currentText())
+            if cats:
+                combo_cat.addItems(cats)
+            else:
+                # fallback a las listas iniciales
+                if combo_tipo.currentText() == "almacen":
+                    combo_cat.addItems(categorias_almacen)
+                else:
+                    combo_cat.addItems(categorias_personal)
+
+        # Inicializar con las categorías correctas
+        actualizar_categorias()
+        combo_tipo.currentIndexChanged.connect(actualizar_categorias)
+
         form_layout.addWidget(combo_cat)
+        layout.addLayout(form_layout)   # 👈 solo una vez, ya no se repite
+
+        # --- Campo para agregar nuevas categorías ---
+        extra_layout = QHBoxLayout()
+        input_nueva_cat = QLineEdit()
+        input_nueva_cat.setPlaceholderText("Nueva categoría...")
+        btn_add_cat = QPushButton("➕ Agregar Categoría")
+
+        def agregar_categoria():
+            nueva = input_nueva_cat.text().strip()
+            if not nueva:
+                QMessageBox.warning(dlg, "Error", "Debe ingresar un nombre de categoría.")
+                return
+            if combo_cat.findText(nueva) == -1:
+                # persistir en DB
+                database.agregar_categoria_gasto(nueva, combo_tipo.currentText())
+                combo_cat.addItem(nueva)
+                input_nueva_cat.clear()
+            else:
+                QMessageBox.warning(dlg, "Error", "La categoría ya existe.")
+
+        btn_add_cat.clicked.connect(agregar_categoria)
+
+        extra_layout.addWidget(input_nueva_cat)
+        extra_layout.addWidget(btn_add_cat)
+        layout.addLayout(extra_layout)
 
         inp_monto = QLineEdit()
         inp_monto.setPlaceholderText("Monto")
@@ -977,7 +1031,6 @@ class MainWindow(QMainWindow):
 
         btn_add = QPushButton("➕ Agregar")
         form_layout.addWidget(btn_add)
-        layout.addLayout(form_layout)
 
         # --- Selector de fechas ---
         fechas_layout = QHBoxLayout()
@@ -985,7 +1038,6 @@ class MainWindow(QMainWindow):
         date_inicio = QDateEdit()
         date_inicio.setCalendarPopup(True)
         date_inicio.setDisplayFormat("yyyy-MM-dd")
-        # Primer día del mes actual
         hoy = QDate.currentDate()
         primer_dia_mes = QDate(hoy.year(), hoy.month(), 1)
         date_inicio.setDate(primer_dia_mes)
@@ -995,17 +1047,17 @@ class MainWindow(QMainWindow):
         date_fin = QDateEdit()
         date_fin.setCalendarPopup(True)
         date_fin.setDisplayFormat("yyyy-MM-dd")
-        # Fecha actual
         date_fin.setDate(hoy)
         fechas_layout.addWidget(date_fin)
 
         layout.addLayout(fechas_layout)
-        
+
         # --- Tabla de gastos ---
         table = QTableWidget()
         table.setColumnCount(4)
         table.setHorizontalHeaderLabels(["Fecha", "Categoría", "Monto", "Detalle"])
         layout.addWidget(table)
+
         # --- Botones ---
         btns = QHBoxLayout()
         btn_del = QPushButton("🗑️ Eliminar seleccionado")
@@ -1051,7 +1103,6 @@ class MainWindow(QMainWindow):
             f1 = date_inicio.date().toString("yyyy-MM-dd") if date_inicio.date().isValid() else None
             f2 = date_fin.date().toString("yyyy-MM-dd") if date_fin.date().isValid() else None
 
-            # Nombre automático del archivo
             fecha_actual = datetime.now().strftime("%Y%m%d_%H%M")
             rango_txt = ""
             if f1 and f2:
@@ -1075,3 +1126,130 @@ class MainWindow(QMainWindow):
 
         cargar()
         dlg.exec()
+
+    def abrir_sectores(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Gestión de Sectores")
+        dlg.resize(500, 300)
+        layout = QVBoxLayout(dlg)
+
+        table = QTableWidget()
+        layout.addWidget(table)
+
+        def cargar():
+            sectores = database.obtener_sectores()
+            table.setRowCount(len(sectores))
+            table.setColumnCount(3)
+            table.setHorizontalHeaderLabels(["ID", "Nombre", "Margen"])
+            for r, s in enumerate(sectores):
+                for c, v in enumerate(s):
+                    table.setItem(r, c, QTableWidgetItem(str(v)))
+            table.resizeColumnsToContents()
+
+        cargar()
+
+        # botones
+        btns = QHBoxLayout()
+        btn_add = QPushButton("➕ Agregar")
+        btn_edit = QPushButton("✏️ Editar")
+        btn_del = QPushButton("🗑 Eliminar")
+        btns.addWidget(btn_add)
+        btns.addWidget(btn_edit)
+        btns.addWidget(btn_del)
+        layout.addLayout(btns)
+
+        # ------------------------
+        # alta/edición inline
+        # ------------------------
+        def formulario(sector=None):
+            d = QDialog(dlg)
+            d.setWindowTitle("Sector")
+            form = QFormLayout(d)
+
+            inp_nombre = QLineEdit()
+            inp_margen = QLineEdit()
+            inp_margen.setPlaceholderText("0.30 = 30%")
+
+            if sector:
+                inp_nombre.setText(sector[1])
+                inp_margen.setText(str(sector[2]))
+
+            form.addRow("Nombre:", inp_nombre)
+            form.addRow("Margen:", inp_margen)
+
+            buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            form.addRow(buttons)
+
+            buttons.accepted.connect(d.accept)
+            buttons.rejected.connect(d.reject)
+
+            if d.exec():
+                nombre = inp_nombre.text().strip()
+                try:
+                    margen = float(inp_margen.text())
+                except:
+                    QMessageBox.warning(d, "Error", "Margen inválido. Ej: 0.30 para 30%")
+                    return None
+                if not nombre:
+                    QMessageBox.warning(d, "Error", "El nombre es obligatorio.")
+                    return None
+                return (nombre, margen)
+            return None
+
+        # ------------------------
+        # acciones
+        # ------------------------
+        def add():
+            data = formulario()
+            if data:
+                nombre, margen = data
+                database.agregar_sector(nombre, margen)
+                cargar()
+                self.actualizar_tabla()
+
+        def edit():
+            row = table.currentRow()
+            if row < 0: return
+            sector = (
+                int(table.item(row,0).text()),
+                table.item(row,1).text(),
+                float(table.item(row,2).text())
+            )
+            data = formulario(sector)
+            if data:
+                nombre, margen = data
+                database.editar_sector(sector[0], nombre, margen)
+                # 🔥 actualizar precios de productos de ese sector
+                self._actualizar_precios_sector(sector[0])
+                cargar()
+                self.actualizar_tabla()
+
+        def delete():
+            row = table.currentRow()
+            if row < 0: return
+            sid = int(table.item(row,0).text())
+            nombre = table.item(row,1).text()
+            if QMessageBox.question(dlg,"Confirmar",f"¿Eliminar sector {nombre}?") == QMessageBox.Yes:
+                database.eliminar_sector(sid)
+                cargar()
+                self.actualizar_tabla()
+
+        btn_add.clicked.connect(add)
+        btn_edit.clicked.connect(edit)
+        btn_del.clicked.connect(delete)
+
+        dlg.exec()
+        
+    def _actualizar_precios_sector(self, sector_id):
+        conn = database.get_connection()
+        cur = conn.cursor()
+        # sacar margen actual
+        margen = database.obtener_margen_sector(sector_id)
+        # actualizar precios de todos los productos del sector
+        cur.execute("SELECT id, costo FROM productos WHERE sector_id=?", (sector_id,))
+        rows = cur.fetchall()
+        for pid, costo in rows:
+            precio = round((costo or 0.0) * (1 + (margen or 0.0)), 2)
+            cur.execute("UPDATE productos SET precio=? WHERE id=?", (precio, pid))
+        conn.commit()
+        conn.close()
