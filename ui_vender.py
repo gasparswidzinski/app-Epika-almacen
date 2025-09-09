@@ -1,3 +1,4 @@
+#ui_vender.py
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QPushButton,
     QLineEdit, QMessageBox, QComboBox, QTableWidget, QTableWidgetItem,
@@ -28,6 +29,18 @@ class FormularioPOS(QDialog):
         layout.addLayout(cliente_layout)
         self.btn_nuevo_cliente.clicked.connect(self._crear_cliente_rapido)
         self._cargar_clientes()
+        
+        # Recuperar carrito temporal si existe
+        carrito_guardado = database.obtener_carrito_temporal()
+        if carrito_guardado:
+            resp = QMessageBox.question(
+                self,
+                "Carrito anterior encontrado",
+                "Se encontró un carrito sin confirmar.\n¿Querés recuperarlo?"
+            )
+            if resp == QMessageBox.Yes:
+                self.cart = carrito_guardado
+                self._refrescar_carrito()
 
         # Buscador por código, nombre o barcode
         search_layout = QHBoxLayout()
@@ -209,9 +222,13 @@ class FormularioPOS(QDialog):
 
     # ---------------- Alta rápida ----------------
     def _alta_rapida_producto(self, codigo_barras=""):
+        
+        
         d = QDialog(self)
         d.setWindowTitle("Alta rápida de producto")
-        f = QFormLayout(d)
+        form = QFormLayout(d)
+
+        # Campos
         inp_codigo = QLineEdit()
         inp_codigo.setText(codigo_barras)
         inp_nombre = QLineEdit()
@@ -219,37 +236,60 @@ class FormularioPOS(QDialog):
         inp_cantidad.setRange(0, 100000)
         inp_cantidad.setValue(1)
         inp_costo = QLineEdit()
+
+        # Combo de sectores
         sectores = database.obtener_sectores()
         combo_sector = QComboBox()
         for s in sectores:
             combo_sector.addItem(s[1], s[0])
-        f.addRow("Código (barcode):", inp_codigo)
-        f.addRow("Nombre:", inp_nombre)
-        f.addRow("Cantidad inicial:", inp_cantidad)
-        f.addRow("Costo:", inp_costo)
-        f.addRow("Sector:", combo_sector)
+
+        # Agregar al formulario
+        form.addRow("Código (barcode):", inp_codigo)
+        form.addRow("Nombre:", inp_nombre)
+        form.addRow("Cantidad inicial:", inp_cantidad)
+        form.addRow("Costo:", inp_costo)
+        form.addRow("Sector:", combo_sector)
+
+        # Botones
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setAutoDefault(False)
         buttons.button(QDialogButtonBox.Cancel).setAutoDefault(False)
-        f.addRow(buttons)
+        form.addRow(buttons)
+
         buttons.accepted.connect(d.accept)
         buttons.rejected.connect(d.reject)
+
         if d.exec():
             codigo = inp_codigo.text().strip()
             nombre = inp_nombre.text().strip()
             cantidad = int(inp_cantidad.value())
+
             try:
                 costo = float(inp_costo.text()) if inp_costo.text().strip() != "" else 0.0
-            except:
-                QMessageBox.warning(self, "Costo", "Costo inválido")
+            except ValueError:
+                QMessageBox.warning(self, "Costo inválido", "Por favor ingrese un costo válido.")
                 return
+
             sector_id = combo_sector.currentData() if combo_sector.currentIndex() >= 0 else None
+
             if not codigo or not nombre:
-                QMessageBox.warning(self, "Datos", "Código y nombre son obligatorios")
+                QMessageBox.warning(self, "Datos incompletos", "Código y nombre son obligatorios.")
                 return
-            database.agregar_o_actualizar_producto(codigo, nombre, cantidad, costo, sector_id, codigo_barras=codigo)
-            QMessageBox.information(self, "Producto", f"Producto '{nombre}' agregado/actualizado")
-            return  # 👈 no cerrar el POS
+
+            # Guardar en la base de datos
+            try:
+                database.agregar_o_actualizar_producto(
+                    codigo=codigo,
+                    nombre=nombre,
+                    cantidad=cantidad,
+                    costo=costo,
+                    sector_id=sector_id,
+                    codigo_barras=codigo
+                )
+                QMessageBox.information(self, "Producto agregado", f"✅ Producto '{nombre}' agregado correctamente.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"No se pudo agregar el producto: {e}")
+
 
     # ---------------- Carrito ----------------
     def _agregar_al_carrito(self, cant_override=None, clear_search=False):
@@ -277,6 +317,7 @@ class FormularioPOS(QDialog):
             })
         QApplication.beep()
         self._refrescar_carrito()
+        database.guardar_carrito_temporal(self.cart)
         if clear_search:
             self.input_buscar.clear()
             # 👇 no resetear self._ultimo_producto, así se puede usar en próximos escaneos
@@ -387,7 +428,7 @@ class FormularioPOS(QDialog):
                             "Ticket",
                             f"Ticket guardado en {ruta}\nNo se pudo imprimir automáticamente:\n{e}"
                         )
-
+            database.limpiar_carrito_temporal()
             self.accept()
         else:
             QMessageBox.critical(self, "Error al vender", f"No se pudo registrar: {res}")

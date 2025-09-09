@@ -151,6 +151,17 @@ def inicializar_db():
         tipo TEXT NOT NULL CHECK(tipo IN ('almacen','personal'))
     )
     """)
+    
+    # --- Nueva tabla para carrito temporal ---
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS carrito_temporal (
+        producto_id INTEGER,
+        codigo TEXT,
+        nombre TEXT,
+        cantidad REAL,
+        precio_unitario REAL
+    )
+    """)
 
 
     conn.commit()
@@ -541,21 +552,27 @@ def reembolsar_venta(venta_id, items_to_refund=None):
     conn = get_connection()
     cur = conn.cursor()
     try:
+        # Buscar la venta
         cur.execute("SELECT id, fecha, total FROM ventas WHERE id=?", (venta_id,))
         venta = cur.fetchone()
         if not venta:
             conn.close()
             return False, "Venta no encontrada"
 
+        # Traer los ítems de la venta
         if items_to_refund is None:
-            cur.execute("SELECT id, producto_id, cantidad, precio_unitario, subtotal FROM venta_items WHERE venta_id=?", (venta_id,))
+            cur.execute("""
+                SELECT id, producto_id, cantidad, precio_unitario, subtotal
+                FROM venta_items WHERE venta_id=?
+            """, (venta_id,))
             items = cur.fetchall()
         else:
             placeholders = ",".join("?" for _ in items_to_refund)
-            cur.execute(
-                f"SELECT id, producto_id, cantidad, precio_unitario, subtotal FROM venta_items WHERE id IN ({placeholders})",
-                tuple(items_to_refund)
-            )
+            cur.execute(f"""
+                SELECT id, producto_id, cantidad, precio_unitario, subtotal
+                FROM venta_items
+                WHERE id IN ({placeholders})
+            """, tuple(items_to_refund))
             items = cur.fetchall()
 
         fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -566,21 +583,18 @@ def reembolsar_venta(venta_id, items_to_refund=None):
             total_devuelto += subtotal
 
             # Reponer stock
-            cur.execute("SELECT cantidad FROM productos WHERE id=?", (pid,))
-            row = cur.fetchone()
-            current = row[0] if row else 0
-            cur.execute("UPDATE productos SET cantidad=? WHERE id=?", (current + cant, pid))
+            cur.execute("UPDATE productos SET cantidad = cantidad + ? WHERE id=?", (cant, pid))
 
             # Registrar movimiento
-            cur.execute(
-                "INSERT INTO movimientos (producto_id, tipo, cambio, precio_unitario, fecha, detalles) VALUES (?, ?, ?, ?, ?, ?)",
-                (pid, "REEMBOLSO", cant, precio_unit, fecha, f"Reembolso de venta {venta_id}")
-            )
+            cur.execute("""
+                INSERT INTO movimientos (producto_id, tipo, cambio, precio_unitario, fecha, detalles)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (pid, "REEMBOLSO", cant, precio_unit, fecha, f"Reembolso de venta {venta_id}"))
 
             # Eliminar el ítem de la venta
             cur.execute("DELETE FROM venta_items WHERE id=?", (vi_id,))
 
-        # Actualizar total de la venta
+        # Actualizar el total de la venta
         cur.execute("UPDATE ventas SET total = total - ? WHERE id=?", (total_devuelto, venta_id))
 
         conn.commit()
@@ -590,6 +604,7 @@ def reembolsar_venta(venta_id, items_to_refund=None):
         conn.rollback()
         conn.close()
         return False, str(e)
+
 
 
 # -----------------------------
@@ -611,54 +626,48 @@ def ventas_resumen_por_tipo(fecha_inicio=None, fecha_fin=None):
 
 def obtener_ventas_con_detalles():
     conn = get_connection()
-    cursor = conn.cursor()
+    cur = conn.cursor()
 
-    cursor.execute("SELECT * FROM ventas ORDER BY fecha")
-    ventas = cursor.fetchall()
+    # Traer todas las ventas
+    cur.execute("SELECT id, fecha, tipo_pago, estado, total FROM ventas ORDER BY fecha DESC")
+    ventas = cur.fetchall()
 
-    resultado = []
+    ventas_lista = []
     for v in ventas:
-        venta_id = v[0]
-        cursor.execute("""
-            SELECT vi.cantidad, vi.precio_unitario, (vi.cantidad * vi.precio_unitario) as subtotal, p.nombre
-            FROM venta_items vi
-            JOIN productos p ON vi.producto_id = p.id
-            WHERE vi.venta_id=?
-        """, (venta_id,))
-        items = cursor.fetchall()
-
-        # cliente display
-        cliente_display = None
-        if len(v) >= 9:
-            # if cliente_id column exists, prefer lookup
-            try:
-                cur2 = conn.cursor()
-                cur2.execute("SELECT nombre FROM clientes WHERE id=?", (v[8],))
-                r = cur2.fetchone()
-                if r:
-                    cliente_display = r[0]
-            except Exception:
-                pass
-        if not cliente_display:
-            cliente_display = v[7] if len(v) >= 8 else ""
-
-        resultado.append({
+        venta = {
             "id": v[0],
             "fecha": v[1],
             "tipo_pago": v[2],
             "estado": v[3],
-            "total": v[4],
-            "recibido": v[5],
-            "vuelto": v[6],
-            "cliente": cliente_display,
-            "items": [
-                {"cantidad": it[0], "precio": it[1], "subtotal": it[2], "nombre": it[3]}
-                for it in items
-            ]
-        })
+            "total": float(v[4]) if v[4] else 0.0,
+        }
+
+        # Traer los items de cada venta con ID real del item
+        cur.execute("""
+            SELECT vi.id, vi.producto_id, p.nombre, vi.cantidad, vi.precio_unitario, vi.subtotal
+            FROM venta_items vi
+            JOIN productos p ON vi.producto_id = p.id
+            WHERE vi.venta_id=?
+        """, (venta["id"],))
+        items = cur.fetchall()
+
+        venta["items"] = [
+            {
+                "id": it[0],             # ID real de venta_items
+                "producto_id": it[1],
+                "nombre": it[2],
+                "cantidad": it[3],
+                "precio": float(it[4]) if it[4] else 0.0,
+                "subtotal": float(it[5]) if it[5] else 0.0,
+            }
+            for it in items
+        ]
+
+        ventas_lista.append(venta)
 
     conn.close()
-    return resultado
+    return ventas_lista
+
 
 def obtener_producto_por_barcode(codigo_barras):
     conn = get_connection()
@@ -989,3 +998,36 @@ def generar_ticket(venta_id, formato=None):
         return generar_ticket_a4(venta_id, ruta)
     else:
         return generar_ticket_termico(venta_id, ruta)
+
+def guardar_carrito_temporal(lista_items):
+    """Guarda el carrito actual en la tabla temporal."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM carrito_temporal")
+    for it in lista_items:
+        cursor.execute("""
+            INSERT INTO carrito_temporal (producto_id, codigo, nombre, cantidad, precio_unitario)
+            VALUES (?, ?, ?, ?, ?)
+        """, (it["producto_id"], it["codigo"], it["nombre"], it["cantidad"], it["precio_unitario"]))
+    conn.commit()
+    conn.close()
+
+def obtener_carrito_temporal():
+    """Devuelve lista de items del carrito temporal."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT producto_id, codigo, nombre, cantidad, precio_unitario FROM carrito_temporal")
+    rows = cursor.fetchall()
+    conn.close()
+    return [
+        {"producto_id": r[0], "codigo": r[1], "nombre": r[2], "cantidad": r[3], "precio_unitario": r[4]}
+        for r in rows
+    ]
+
+def limpiar_carrito_temporal():
+    """Borra el carrito temporal de la base."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM carrito_temporal")
+    conn.commit()
+    conn.close()

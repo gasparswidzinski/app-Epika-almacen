@@ -528,120 +528,150 @@ class MainWindow(QMainWindow):
     # -------------------------
     def abrir_reembolsos(self):
         dlg = QDialog(self)
-        dlg.setWindowTitle("Reembolsos - Seleccionar venta")
-        layout = QHBoxLayout(dlg)
+        dlg.setWindowTitle("Gestión de Reembolsos")
+        dlg.resize(900, 600)
+        layout = QVBoxLayout(dlg)
 
-        # --- Panel de ventas ---
-        vbox_ventas = QVBoxLayout()
-        vbox_ventas.addWidget(QLabel("Ventas recientes:"))
+        # Tabla de ventas
         table_ventas = QTableWidget()
         table_ventas.setColumnCount(5)
-        table_ventas.setHorizontalHeaderLabels(["ID", "Fecha", "TipoPago", "Estado", "Total"])
-        ventas = database.obtener_ventas()
-        table_ventas.setRowCount(len(ventas))
-        for r, v in enumerate(ventas):
-            table_ventas.setItem(r,0, QTableWidgetItem(str(v[0])))
-            table_ventas.setItem(r,1, QTableWidgetItem(str(v[1])))
-            table_ventas.setItem(r,2, QTableWidgetItem(str(v[2])))
-            table_ventas.setItem(r,3, QTableWidgetItem(str(v[3])))
-            table_ventas.setItem(r,4, QTableWidgetItem(str(v[4])))
-        vbox_ventas.addWidget(table_ventas)
-        layout.addLayout(vbox_ventas, stretch=1)
+        table_ventas.setHorizontalHeaderLabels(["Venta ID", "Fecha", "Pago", "Estado", "Total ($)"])
+        layout.addWidget(table_ventas)
 
-        # --- Panel de items ---
-        vbox_items = QVBoxLayout()
-        vbox_items.addWidget(QLabel("Items de la venta seleccionada:"))
+        # Tabla de items
         table_items = QTableWidget()
         table_items.setColumnCount(5)
-        table_items.setHorizontalHeaderLabels(["ID Item", "Producto", "Cantidad", "Precio Unitario", "Subtotal"])
-        vbox_items.addWidget(table_items)
+        table_items.setHorizontalHeaderLabels(["Item ID", "Producto", "Cantidad", "Precio Unitario ($)", "Subtotal ($)"])
+        layout.addWidget(table_items)
 
-        # Resumen de devolución
-        lbl_resumen = QLabel("💰 Total a devolver: $0.00")
-        lbl_resumen.setStyleSheet("font-weight: bold; font-size: 14px; color: darkred;")
-        vbox_items.addWidget(lbl_resumen)
+        # Botones
+        btn_layout = QHBoxLayout()
+        btn_reembolsar_total = QPushButton("↩️ Reembolsar toda la venta")
+        btn_reembolsar_parcial = QPushButton("↩️ Reembolsar ítem seleccionado")
+        btn_cerrar = QPushButton("❌ Cerrar")
 
-        layout.addLayout(vbox_items, stretch=2)
+        btn_reembolsar_total.setStyleSheet("background-color:#d9534f;color:white;font-weight:bold;")
+        btn_reembolsar_parcial.setStyleSheet("background-color:#0275d8;color:white;font-weight:bold;")
+        btn_cerrar.setStyleSheet("background-color:#5bc0de;color:black;")
 
-        # --- Botones ---
-        btns = QHBoxLayout()
-        btn_reemb_all = QPushButton("↩️ Reembolsar venta completa")
-        btn_reemb_sel = QPushButton("↩️ Reembolsar ítems seleccionados")
-        btn_cancel = QPushButton("❌ Cancelar")
-        btns.addWidget(btn_reemb_all); btns.addWidget(btn_reemb_sel); btns.addWidget(btn_cancel)
-        vbox_items.addLayout(btns)
+        btn_layout.addWidget(btn_reembolsar_total)
+        btn_layout.addWidget(btn_reembolsar_parcial)
+        btn_layout.addWidget(btn_cerrar)
+        layout.addLayout(btn_layout)
 
-        # --- Funciones internas ---
-        def cargar_items():
-            r = table_ventas.currentRow()
-            if r < 0: 
+        # Cargar ventas
+        ventas = database.obtener_ventas_con_detalles()
+        table_ventas.setRowCount(len(ventas))
+        for r, v in enumerate(ventas):
+            table_ventas.setItem(r, 0, QTableWidgetItem(str(v["id"])))
+            table_ventas.setItem(r, 1, QTableWidgetItem(str(v["fecha"])))
+            table_ventas.setItem(r, 2, QTableWidgetItem(v["tipo_pago"]))
+            table_ventas.setItem(r, 3, QTableWidgetItem(v["estado"]))
+
+            item_total = QTableWidgetItem(f"${v['total']:.2f}")
+            item_total.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            table_ventas.setItem(r, 4, item_total)
+
+            # Colorear ventas reembolsadas
+            if v["estado"] == "REEMBOLSADO":
+                for col in range(5):
+                    table_ventas.item(r, col).setBackground(QColor("#f0f0f0"))
+
+        # Mostrar items de la venta seleccionada
+        def mostrar_items():
+            row = table_ventas.currentRow()
+            if row < 0:
                 return
-            venta_id = int(table_ventas.item(r,0).text())
-            items = database.obtener_items_venta(venta_id)
-            table_items.setRowCount(len(items))
-            for i, it in enumerate(items):
-                vi_id, pid, nombre, cant, precio_unit, subtotal = it
-                table_items.setItem(i,0, QTableWidgetItem(str(vi_id)))
-                table_items.setItem(i,1, QTableWidgetItem(nombre))
-                table_items.setItem(i,2, QTableWidgetItem(str(cant)))
-                table_items.setItem(i,3, QTableWidgetItem(f"${precio_unit:.2f}"))
-                table_items.setItem(i,4, QTableWidgetItem(f"${subtotal:.2f}"))
-            actualizar_resumen()
-
-        def actualizar_resumen():
-            total = 0.0
-            for i in range(table_items.rowCount()):
-                if table_items.item(i,0) and table_items.item(i,0).isSelected():
-                    try:
-                        val = table_items.item(i,4).text().replace("$","").replace(",","")
-                        total += float(val)
-                    except:
-                        pass
-            lbl_resumen.setText(f"💰 Total a devolver: ${total:,.2f}")
-
-        def reembolsar_todo():
-            r = table_ventas.currentRow()
-            if r < 0:
-                QMessageBox.warning(dlg, "Seleccionar", "Seleccioná una venta")
+            venta_id = int(table_ventas.item(row, 0).text())
+            venta = next((x for x in ventas if x["id"] == venta_id), None)
+            if not venta:
                 return
-            venta_id = int(table_ventas.item(r,0).text())
+
+            table_items.setRowCount(len(venta["items"]))
+            for i, it in enumerate(venta["items"]):
+                # Usamos el ID real del item en la DB
+                table_items.setItem(i, 0, QTableWidgetItem(str(it["id"])))
+                table_items.setItem(i, 1, QTableWidgetItem(it["nombre"]))
+
+                item_cant = QTableWidgetItem(str(it["cantidad"]))
+                item_cant.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                table_items.setItem(i, 2, item_cant)
+
+                item_precio = QTableWidgetItem(f"${it['precio']:.2f}")
+                item_precio.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                table_items.setItem(i, 3, item_precio)
+
+                item_sub = QTableWidgetItem(f"${it['subtotal']:.2f}")
+                item_sub.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                table_items.setItem(i, 4, item_sub)
+
+        table_ventas.itemSelectionChanged.connect(mostrar_items)
+        if ventas:
+            table_ventas.selectRow(0)
+            mostrar_items()
+
+        # Reembolso total
+        def reembolsar_total():
+            row = table_ventas.currentRow()
+            if row < 0:
+                QMessageBox.warning(dlg, "Error", "Seleccione una venta para reembolsar.")
+                return
+
+            venta_id = int(table_ventas.item(row, 0).text())
+
+            reply = QMessageBox.question(
+                dlg, "Confirmar reembolso",
+                f"¿Seguro que desea reembolsar COMPLETAMENTE la venta {venta_id}?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
             ok, msg = database.reembolsar_venta(venta_id)
             if ok:
-                QMessageBox.information(dlg, "Reembolso", msg)
-                self.actualizar_tabla()
-                self.actualizar_historial()
+                QMessageBox.information(dlg, "Reembolso realizado", msg)
+                self.actualizar_tabla()       #  refresca la tabla de productos
+                self.actualizar_historial()   # refresca historial de movimientos
                 dlg.accept()
             else:
-                QMessageBox.critical(dlg, "Error", msg)
+                QMessageBox.warning(dlg, "Error en reembolso", msg)
 
-        def reembolsar_items():
-            r = table_ventas.currentRow()
-            if r < 0:
-                QMessageBox.warning(dlg, "Seleccionar", "Seleccioná una venta")
+        # Reembolso parcial
+        def reembolsar_parcial():
+            row_v = table_ventas.currentRow()
+            row_i = table_items.currentRow()
+
+            if row_v < 0 or row_i < 0:
+                QMessageBox.warning(dlg, "Error", "Seleccione una venta y un ítem para reembolsar.")
                 return
-            venta_id = int(table_ventas.item(r,0).text())
-            seleccionados = [table_items.item(i,0).text() for i in range(table_items.rowCount()) if table_items.item(i,0).isSelected()]
-            if not seleccionados:
-                QMessageBox.warning(dlg, "Seleccionar", "Seleccioná al menos un ítem")
+
+            venta_id = int(table_ventas.item(row_v, 0).text())
+            item_id = int(table_items.item(row_i, 0).text())  # Ahora es el ID real
+
+            reply = QMessageBox.question(
+                dlg, "Confirmar reembolso parcial",
+                f"¿Seguro que desea reembolsar el ítem {item_id} de la venta {venta_id}?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
                 return
-            seleccionados = list(map(int, seleccionados))
-            ok, msg = database.reembolsar_venta(venta_id, items_to_refund=seleccionados)
+
+            ok, msg = database.reembolsar_venta(venta_id, [item_id])
             if ok:
-                QMessageBox.information(dlg, "Reembolso", msg)
+                QMessageBox.information(dlg, "Reembolso parcial realizado", msg)
                 self.actualizar_tabla()
                 self.actualizar_historial()
                 dlg.accept()
             else:
-                QMessageBox.critical(dlg, "Error", msg)
+                QMessageBox.warning(dlg, "Error en reembolso", msg)
 
-        # --- Conexiones ---
-        table_ventas.itemSelectionChanged.connect(cargar_items)
-        table_items.itemSelectionChanged.connect(actualizar_resumen)
-        btn_reemb_all.clicked.connect(reembolsar_todo)
-        btn_reemb_sel.clicked.connect(reembolsar_items)
-        btn_cancel.clicked.connect(dlg.reject)
+        # Conectar botones
+        btn_reembolsar_total.clicked.connect(reembolsar_total)
+        btn_reembolsar_parcial.clicked.connect(reembolsar_parcial)
+        btn_cerrar.clicked.connect(dlg.reject)
 
         dlg.exec()
+
 
     # -------------------------
     # Bajo stock (usa helper de Excel)
