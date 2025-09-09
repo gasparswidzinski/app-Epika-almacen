@@ -11,6 +11,7 @@ from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 from datetime import datetime
 import os
+from pathlib import Path
 
 
 
@@ -193,8 +194,29 @@ def inicializar_db():
             cur.execute("INSERT INTO categorias_gasto (nombre, tipo) VALUES (?, ?)", (nombre, "personal"))
         except sqlite3.IntegrityError:
             pass
+        
+     # Tabla usuarios
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS usuarios (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        usuario TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        rol TEXT NOT NULL CHECK(rol IN ('admin','user','developer'))
 
+    )
+    """)
 
+    # Usuario admin por defecto
+    try:
+        cur.execute("INSERT INTO usuarios (usuario, password, rol) VALUES ('admin', 'admin', 'admin')")
+    except sqlite3.IntegrityError:
+        pass
+    
+    # Usuario developer por defecto (se asegura siempre)
+    cur.execute("SELECT 1 FROM usuarios WHERE usuario='developer'")
+    if not cur.fetchone():
+        cur.execute("INSERT INTO usuarios (usuario, password, rol) VALUES ('developer', 'developer', 'developer')")
+    
     conn.commit()
     conn.close()
 
@@ -1089,3 +1111,53 @@ def obtener_categorias_gasto(tipo="almacen"):
     rows = [r[0] for r in cur.fetchall()]
     conn.close()
     return rows
+
+def verificar_usuario(usuario, password):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT rol FROM usuarios WHERE usuario=? AND password=?", (usuario, password))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def crear_usuario(usuario, password, rol="user"):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO usuarios (usuario, password, rol) VALUES (?, ?, ?)", (usuario, password, rol))
+    conn.commit()
+    conn.close()
+
+# -----------------------------
+# USUARIOS
+# -----------------------------
+def obtener_usuarios():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, usuario, rol FROM usuarios ORDER BY usuario")
+    data = cur.fetchall()
+    conn.close()
+    return data
+
+def agregar_usuario(usuario, password, rol):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO usuarios (usuario, password, rol) VALUES (?, ?, ?)", (usuario, password, rol))
+    conn.commit()
+    conn.close()
+
+def editar_usuario(uid, usuario, password, rol):
+    conn = get_connection()
+    cur = conn.cursor()
+    if password:
+        cur.execute("UPDATE usuarios SET usuario=?, password=?, rol=? WHERE id=?", (usuario, password, rol, uid))
+    else:
+        cur.execute("UPDATE usuarios SET usuario=?, rol=? WHERE id=?", (usuario, rol, uid))
+    conn.commit()
+    conn.close()
+
+def eliminar_usuario(uid):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM usuarios WHERE id=?", (uid,))
+    conn.commit()
+    conn.close()

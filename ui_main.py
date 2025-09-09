@@ -15,6 +15,7 @@ import os
 import shutil
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QDialogButtonBox
+from ui_usuarios import UsuariosDialog 
 
 
 class MainWindow(QMainWindow):
@@ -89,7 +90,12 @@ class MainWindow(QMainWindow):
         # status bar
         self.status = QStatusBar()
         self.setStatusBar(self.status)
-        self.status.showMessage("✅ Aplicación iniciada")
+
+        if hasattr(self, "usuario_actual") and self.usuario_actual:
+            self.status.showMessage(f"✅ Sesión iniciada como: {self.usuario_actual} ({self.rol_actual})")
+        else:
+            self.status.showMessage("✅ Aplicación iniciada")
+            self.status.showMessage("✅ Aplicación iniciada")
 
         # inicializar
         self._productos_cache = []
@@ -132,6 +138,12 @@ class MainWindow(QMainWindow):
         self._scan_timer.timeout.connect(self._procesar_scanner)
         # cuando cambia el texto, reiniciamos el timer
         self.input_buscar.textChanged.connect(self._on_scanner_text_changed)
+        
+        self.rol_actual = None  # por defecto sin rol
+        
+        self.act_usuarios = QAction("👤 Usuarios", self)
+        toolbar.addAction(self.act_usuarios)
+        self.act_usuarios.triggered.connect(self.abrir_usuarios)
         
         
 
@@ -1253,3 +1265,35 @@ class MainWindow(QMainWindow):
             cur.execute("UPDATE productos SET precio=? WHERE id=?", (precio, pid))
         conn.commit()
         conn.close()
+
+    # -------------------------
+    # Control de permisos por rol
+    # ------------------------------
+    def aplicar_permisos(self):
+        """
+        Aplica restricciones según el rol de usuario.
+        - developer: acceso total
+        - admin: acceso total
+        - user: restringido (no puede ver sectores, gastos, usuarios)
+        """
+        if self.rol_actual in ("developer", "admin"):
+            return  # acceso completo, no ocultamos nada
+
+        if self.rol_actual == "user":
+            # 🔒 Ocultar acciones restringidas
+            self.act_sectores.setVisible(False)
+            self.act_gastos.setVisible(False)
+            self.act_usuarios.setVisible(False)
+
+
+        # mostrar rol actual en la barra de estado
+        self.status.showMessage(f"✅ Sesión iniciada como {self.rol_actual}")
+        
+        
+    
+    def abrir_usuarios(self):
+        if self.rol_actual != "admin":
+            QMessageBox.warning(self, "Permiso denegado", "Solo los administradores pueden gestionar usuarios")
+            return
+        dlg = UsuariosDialog(self)
+        dlg.exec()
