@@ -551,8 +551,9 @@ class MainWindow(QMainWindow):
                 f"✅ Finalizado.\n\nActualizados: {updated}\nInsertados: {inserted}\nErrores: {errores}"
             )
             # refrescar tabla de productos
-            if hasattr(self, "cargar_productos"):
-                self.cargar_productos()
+            self.actualizar_tabla()
+            self.actualizar_historial()
+            self.aplicar_filtros()
 
         except Exception as e:
             QMessageBox.critical(self, "Importar", f"Error al importar:\n{e}")

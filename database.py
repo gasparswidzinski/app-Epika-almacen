@@ -486,7 +486,7 @@ def eliminar_producto(id_producto):
     conn.close()
 
     if row:
-        agregar_movimiento(id_producto, "ELIM", 0, row[1] if row[1] else 0, detalles=f"Eliminado: {row[0]}")
+         agregar_movimiento(None, "ELIM", 0, row[1] or 0, detalles=f"Eliminado: {row[0]}")
 
 def obtener_productos():
     conn = get_connection()
