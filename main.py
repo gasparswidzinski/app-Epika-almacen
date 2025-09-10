@@ -7,6 +7,7 @@ from ui_main import MainWindow
 from ui_login import LoginDialog
 from ui_usuarios import UsuarioForm
 
+# (limpieza) quitamos imports duplicados de os, shutil
 
 def respaldo_automatico():
     if not os.path.exists("backups"):
@@ -14,34 +15,44 @@ def respaldo_automatico():
     fecha = datetime.now().strftime("%Y-%m-%d")
     destino = os.path.join("backups", f"almacen_{fecha}.db")
     if not os.path.exists(destino):
-        # Copiamos la DB si existe
-        if os.path.exists("almacen.db"):
-            shutil.copy("almacen.db", destino)
-        else:
-            # si no existe aún la DB (primera ejecución), no hacemos nada
-            pass
-
+        if os.path.exists(database.DB_PATH):
+            shutil.copy(database.DB_PATH, destino)
 
 if __name__ == "__main__":
-    # inicializar DB (crea tablas, semillas)
-    database.inicializar_db()
+    # (robustez) si hay un fallo en inicializar_db, avisamos y salimos prolijamente
+    try:
+        database.inicializar_db()  # crea/migra DB y tablas
+    except Exception as e:
+        # aún no tenemos QApplication; usamos print y salimos
+        print("Error inicializando base de datos:", e)
+        sys.exit(1)
+
+    # Garantizamos la carpeta de datos (útil para backup u "abrir carpeta de datos")
+    os.makedirs(database.DATA_DIR, exist_ok=True)
+
+    # Backup del día antes de abrir UI
     respaldo_automatico()
+
     app = QApplication(sys.argv)
-    
-    # 🔑 mostrar login antes de abrir la app
+
+    # 🔑 diálogo de login
     login = LoginDialog()
     if login.exec() != LoginDialog.Accepted:
         sys.exit(0)
-    
+
     window = MainWindow()
     window.rol_actual = login.rol
 
-    # 👤 Si es el primer inicio solo con admin
-    conn = database.get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM usuarios")
-    cant_usuarios = cur.fetchone()[0]
-    conn.close()
+    # 👤 Primer inicio: sólo admin + developer presentes → pedir crear admin propio
+    try:
+        conn = database.get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM usuarios")
+        cant_usuarios = cur.fetchone()[0]
+        conn.close()
+    except Exception as e:
+        QMessageBox.critical(None, "Base de datos", f"Error consultando usuarios:\n{e}")
+        sys.exit(1)
 
     if cant_usuarios == 2 and login.rol == "admin":
         QMessageBox.information(
@@ -52,7 +63,7 @@ if __name__ == "__main__":
         )
 
         while True:
-            dlg = UsuarioForm()
+            dlg = UsuarioForm(window)  # (mejora) parent para centrar y bloquear fondo
             if dlg.exec():
                 user, pwd, rol = dlg.get_data()
                 if not user or not pwd:
@@ -62,7 +73,7 @@ if __name__ == "__main__":
                     QMessageBox.warning(None, "Error", "El primer usuario personalizado debe ser administrador.")
                     continue
                 try:
-                    database.agregar_usuario(user, pwd, rol)
+                    database.agregar_usuario(user, pwd, rol)  # guarda hasheado
                     QMessageBox.information(
                         None,
                         "Usuario creado",
@@ -73,6 +84,7 @@ if __name__ == "__main__":
                     QMessageBox.critical(None, "Error", f"No se pudo crear el usuario:\n{e}")
                     continue
             else:
+                # (misma lógica que tenías) obliga a crear el usuario
                 QMessageBox.warning(None, "Obligatorio", "Debés crear un usuario para continuar.")
 
     window.aplicar_permisos()

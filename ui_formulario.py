@@ -106,12 +106,14 @@ class FormularioProducto(QDialog):
         except:
             cantidad = 0
         try:
-            costo = float(self.input_costo.text()) if self.input_costo.text().strip() != "" else 0.0
+            txt_costo = self.input_costo.text().strip().replace(",", ".")
+            costo = float(txt_costo) if txt_costo != "" else 0.0
         except:
             QMessageBox.warning(self, "Costo", "Costo inválido")
             return
         sector_id = self.input_sector.currentData() if self.input_sector.currentIndex() >= 0 else None
-        cod_barras = self.input_codigobarras.text().strip()
+        cod_barras_txt = (self.input_codigobarras.text() or "").strip()
+        cod_barras = cod_barras_txt if cod_barras_txt != "" else None
 
         try:
             database.agregar_o_actualizar_producto(codigo, nombre, cantidad, costo, sector_id, codigo_barras=cod_barras)

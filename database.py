@@ -12,18 +12,107 @@ from reportlab.pdfgen import canvas
 from datetime import datetime
 import os
 from pathlib import Path
+import os as _os, hashlib as _hashlib, binascii as _binascii
 
 
 
-DB_NAME = "almacen.db"
+
+# --- Rutas robustas: usar ProgramData para que siempre sea visible ---
+import os, sys, sqlite3
+from datetime import datetime
+
+APP_NAME = "GestorDeStock"
+
+def _get_progdata() -> str:
+    base = os.environ.get("PROGRAMDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+    target = os.path.join(base, APP_NAME)
+    os.makedirs(target, exist_ok=True)
+    return target
+
+def _scan_msstore_localcache_candidates() -> list:
+    """Origen típico de Python MS Store: ...\Local\Packages\PythonSoftwareFoundation...\LocalCache\Roaming\GestorDeStock"""
+    cands = []
+    local = os.environ.get("LOCALAPPDATA", "")
+    pkgs = os.path.join(local, "Packages")
+    try:
+        for name in os.listdir(pkgs):
+            if name.startswith("PythonSoftwareFoundation.Python"):
+                cands.append(os.path.join(pkgs, name, "LocalCache", "Roaming", APP_NAME))
+    except Exception:
+        pass
+    return cands
+
+def _migrar_a(dest_dir: str):
+    """Si hay DB en orígenes conocidos, copiarla a dest_dir/almacen.db (una sola vez)."""
+    import shutil
+    new_db = os.path.join(dest_dir, "almacen.db")
+    if os.path.exists(new_db):
+        return  # ya hay DB en destino
+
+    # 1) Desde MS Store LocalCache\Roaming
+    for cand in _scan_msstore_localcache_candidates():
+        old_db = os.path.join(cand, "almacen.db")
+        if os.path.exists(old_db):
+            try:
+                shutil.copy(old_db, new_db)
+                return
+            except Exception as e:
+                print("⚠️ No se pudo migrar desde LocalCache:", e)
+
+    # 2) Desde Roaming real
+    roaming = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Roaming", APP_NAME)
+    old_db = os.path.join(roaming, "almacen.db")
+    if os.path.exists(old_db):
+        try:
+            shutil.copy(old_db, new_db)
+            return
+        except Exception as e:
+            print("⚠️ No se pudo migrar desde Roaming:", e)
+
+    # 3) Desde la carpeta del ejecutable (instalaciones viejas)
+    try:
+        exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+        legacy = os.path.join(exe_dir, "almacen.db")
+        if os.path.exists(legacy):
+            bkp = os.path.join(exe_dir, f"almacen_legacy_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
+            shutil.copy(legacy, bkp)          # respaldo junto al exe
+            shutil.copy(legacy, new_db)       # migración efectiva
+    except Exception as e:
+        print("⚠️ No se pudo migrar desde la carpeta del ejecutable:", e)
+
+# Directorio de datos definitivo (ProgramData)
+DATA_DIR = _get_progdata()
+_migrar_a(DATA_DIR)
+
+DB_PATH = os.path.join(DATA_DIR, "almacen.db")
 
 def get_connection():
-    return sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+def _migrar_db_si_corresponde():
+    """
+    Si existe 'almacen.db' junto al código/ejecutable (instalaciones viejas) y NO existe en DATA_DIR,
+    copiamos la DB a la nueva ubicación y dejamos un backup junto al exe.
+    """
+    try:
+        exe_dir = os.path.dirname(os.path.abspath(__file__))
+        vieja = os.path.join(exe_dir, "almacen.db")
+        if os.path.exists(vieja) and not os.path.exists(DB_PATH):
+            import shutil
+            bkp = os.path.join(exe_dir, f"almacen_legacy_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
+            shutil.copy(vieja, bkp)     # respaldo por las dudas
+            shutil.copy(vieja, DB_PATH) # migración efectiva
+    except Exception as e:
+        print("⚠️ No se pudo migrar DB:", e)
+
 
 # -----------------------------
 # Inicialización / migración
 # -----------------------------
 def inicializar_db():
+    _migrar_db_si_corresponde()
     conn = get_connection()
     cur = conn.cursor()
 
@@ -206,16 +295,31 @@ def inicializar_db():
     )
     """)
 
-    # Usuario admin por defecto
+    # --- Asegurar usuarios por defecto (si faltan) ---
     try:
-        cur.execute("INSERT INTO usuarios (usuario, password, rol) VALUES ('admin', 'admin', 'admin')")
-    except sqlite3.IntegrityError:
+        cur.execute("SELECT 1 FROM usuarios WHERE usuario='admin'")
+        if not cur.fetchone():
+            cur.execute("INSERT INTO usuarios (usuario,password,rol) VALUES (?,?,?)",
+                        ('admin', _hash_password('admin'), 'admin'))
+        cur.execute("SELECT 1 FROM usuarios WHERE usuario='developer'")
+        if not cur.fetchone():
+            cur.execute("INSERT INTO usuarios (usuario,password,rol) VALUES (?,?,?)",
+                        ('developer', _hash_password('developer'), 'developer'))
+    except Exception as e:
+        print("⚠️ No se pudo asegurar usuarios por defecto:", e)
+
+        
+    # --- Índice único condicional para código de barras (evita duplicados no nulos) ---
+    try:
+        cur.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_prod_barcode
+            ON productos(codigo_barras)
+            WHERE codigo_barras IS NOT NULL
+        """)
+    except Exception:
+        # Si existen duplicados hoy, el índice no se creará.
+        # La app sigue funcionando; al depurar duplicados, se creará en el próximo arranque.
         pass
-    
-    # Usuario developer por defecto (se asegura siempre)
-    cur.execute("SELECT 1 FROM usuarios WHERE usuario='developer'")
-    if not cur.fetchone():
-        cur.execute("INSERT INTO usuarios (usuario, password, rol) VALUES ('developer', 'developer', 'developer')")
     
     conn.commit()
     conn.close()
@@ -296,8 +400,11 @@ def obtener_movimientos(limit=100):
 # PRODUCTOS
 # -----------------------------
 def agregar_producto(codigo, nombre, cantidad, costo, sector_id, codigo_barras):
+    if not codigo_barras or str(codigo_barras).strip() == "":
+        codigo_barras = None
     margen = obtener_margen_sector(sector_id)
     precio = round((costo or 0.0) + ((costo or 0.0) * (margen or 0.0)), 2)
+    
 
     conn = get_connection()
     cur = conn.cursor()
@@ -313,45 +420,61 @@ def agregar_producto(codigo, nombre, cantidad, costo, sector_id, codigo_barras):
     return producto_id
 
 def agregar_o_actualizar_producto(codigo, nombre, cantidad, costo, sector_id=None, codigo_barras=""):
+    """
+    Upsert de producto:
+      - Si existe un producto con el mismo 'codigo' → actualiza (suma 'cantidad', actualiza costo/sector/precio/barcode).
+      - Si no existe → crea uno nuevo.
+    Notas:
+      - 'codigo_barras' vacío se normaliza a None para no chocar con el índice único condicional (IS NOT NULL).
+      - 'precio' se recalcula con el margen del sector.
+    """
+    # Normalizar barcode vacío a NULL (permite múltiples productos sin código de barras)
+    if not codigo_barras or str(codigo_barras).strip() == "":
+        codigo_barras = None
+
     conn = get_connection()
     cur = conn.cursor()
+
+    # Buscar por 'codigo' interno (clave de upsert)
     cur.execute("SELECT id, cantidad, costo, sector_id FROM productos WHERE codigo = ?", (codigo,))
     row = cur.fetchone()
 
     if row:
+        # Existe → actualizar sumando stock y recalculando precio según costo/sector resultantes
         producto_id = row[0]
-        new_cant = (row[1] or 0) + cantidad
-        costo_final = costo if costo is not None else (row[2] or 0)
-        sector_final = sector_id if sector_id is not None else row[3]
-        margen = obtener_margen_sector(sector_final)
-        precio = round(costo_final + (costo_final * margen), 2) if costo_final is not None else 0.0
+        current_cant = row[1] or 0
+        current_costo = row[2] if row[2] is not None else 0.0
+        current_sector = row[3]
 
-        cur.execute("UPDATE productos SET cantidad=?, costo=?, sector_id=?, precio=?, codigo_barras=? WHERE id=?",
-                    (new_cant, costo_final, sector_final, precio, codigo_barras, producto_id))
+        new_cant = current_cant + (cantidad or 0)
+
+        # Mantener costo/sector existentes si no se pasan nuevos
+        costo_final = costo if (costo is not None) else current_costo
+        sector_final = sector_id if (sector_id is not None) else current_sector
+
+        margen = obtener_margen_sector(sector_final)
+        # Si no hay costo, precio=0.0 (evita None)
+        precio = round((costo_final or 0.0) * (1 + (margen or 0.0)), 2) if costo_final is not None else 0.0
+
+        cur.execute("""
+            UPDATE productos
+               SET cantidad = ?,
+                   costo = ?,
+                   sector_id = ?,
+                   precio = ?,
+                   codigo_barras = ?
+             WHERE id = ?
+        """, (new_cant, costo_final, sector_final, precio, codigo_barras, producto_id))
         conn.commit()
         conn.close()
 
-        agregar_movimiento(producto_id, "INGRESO", cantidad, precio, detalles="Ingreso por import/alta")
+        # Registrar movimiento de ingreso por alta/import
+        agregar_movimiento(producto_id, "INGRESO", cantidad or 0, precio, detalles="Ingreso por import/alta")
         return producto_id
     else:
+        # No existe → crear nuevo (agregar_producto también normaliza y registra movimiento)
         conn.close()
-        return agregar_producto(codigo, nombre, cantidad, costo, sector_id, codigo_barras)
-
-def editar_producto(id_producto, codigo, nombre, cantidad, costo, sector_id, codigo_barras):
-    margen = obtener_margen_sector(sector_id)
-    precio = round((costo or 0.0) + ((costo or 0.0) * (margen or 0.0)), 2)
-
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        UPDATE productos
-        SET codigo=?, nombre=?, cantidad=?, costo=?, sector_id=?, precio=?, codigo_barras=?
-        WHERE id=?
-    """, (codigo, nombre, cantidad, costo, sector_id, precio, codigo_barras, id_producto))
-    conn.commit()
-    conn.close()
-
-    agregar_movimiento(id_producto, "EDIT", 0, precio, detalles="Edición de producto")
+        return agregar_producto(codigo, nombre, cantidad or 0, costo, sector_id, codigo_barras)
 
 def eliminar_producto(id_producto):
     conn = get_connection()
@@ -375,6 +498,54 @@ def obtener_productos():
         LEFT JOIN sectores s ON p.sector_id = s.id
         ORDER BY p.nombre COLLATE NOCASE
     """)
+    data = cur.fetchall()
+    conn.close()
+    return data
+
+# --- NUEVO: búsqueda flexible de productos (prioriza match exacto por código / barcode)
+def buscar_productos(query, limit=50):
+    """
+    Devuelve una lista de productos que coincidan con:
+    - código exacto o código de barras exacto (flujo scanner)
+    - o NOMBRE/CÓDIGO/BARCODE que CONTENGAN el texto (búsqueda manual)
+    Columnas devueltas = igual que obtener_productos()
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # 1) Match exacto por código interno o código de barras
+    cur.execute("""
+        SELECT p.id, p.codigo, p.nombre, p.cantidad, p.costo,
+               COALESCE(s.nombre, '') as sector, p.precio, COALESCE(p.codigo_barras, ''), p.movimientos
+        FROM productos p
+        LEFT JOIN sectores s ON p.sector_id = s.id
+        WHERE LOWER(p.codigo) = LOWER(?)
+           OR LOWER(COALESCE(p.codigo_barras,'')) = LOWER(?)
+        ORDER BY p.nombre COLLATE NOCASE
+        LIMIT ?
+    """, (q, q, limit))
+    exactos = cur.fetchall()
+    if exactos:
+        conn.close()
+        return exactos
+
+    # 2) Búsqueda por contiene (insensible a mayúsculas)
+    like = f"%{q}%"
+    cur.execute("""
+        SELECT p.id, p.codigo, p.nombre, p.cantidad, p.costo,
+               COALESCE(s.nombre, '') as sector, p.precio, COALESCE(p.codigo_barras, ''), p.movimientos
+        FROM productos p
+        LEFT JOIN sectores s ON p.sector_id = s.id
+        WHERE p.nombre LIKE ? COLLATE NOCASE
+           OR p.codigo LIKE ? COLLATE NOCASE
+           OR COALESCE(p.codigo_barras,'') LIKE ? COLLATE NOCASE
+        ORDER BY p.nombre COLLATE NOCASE
+        LIMIT ?
+    """, (like, like, like, limit))
     data = cur.fetchall()
     conn.close()
     return data
@@ -929,7 +1100,7 @@ def _datos_venta_y_items(venta_id):
         SELECT v.fecha, v.tipo_pago, v.total, v.efectivo_recibido, v.vuelto,
                COALESCE(c.nombre, 'Consumidor Final') AS cliente_nombre
         FROM ventas v
-        LEFT JOIN clientes c ON c.id = v.cliente
+        LEFT JOIN clientes c ON c.id = v.cliente_id
         WHERE v.id = ?
     """, (venta_id,))
     venta = cur.fetchone()
@@ -1054,7 +1225,7 @@ def generar_ticket(venta_id, formato=None):
 
 def guardar_carrito_temporal(lista_items):
     """Guarda el carrito actual en la tabla temporal."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM carrito_temporal")
     for it in lista_items:
@@ -1067,7 +1238,7 @@ def guardar_carrito_temporal(lista_items):
 
 def obtener_carrito_temporal():
     """Devuelve lista de items del carrito temporal."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT producto_id, codigo, nombre, cantidad, precio_unitario FROM carrito_temporal")
     rows = cursor.fetchall()
@@ -1079,7 +1250,7 @@ def obtener_carrito_temporal():
 
 def limpiar_carrito_temporal():
     """Borra el carrito temporal de la base."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM carrito_temporal")
     conn.commit()
@@ -1112,18 +1283,94 @@ def obtener_categorias_gasto(tipo="almacen"):
     conn.close()
     return rows
 
-def verificar_usuario(usuario, password):
+
+def _hash_password(plain: str, iterations: int = 200_000) -> str:
+    if plain is None:
+        plain = ""
+    salt = _os.urandom(16)
+    dk = _hashlib.pbkdf2_hmac("sha256", plain.encode("utf-8"), salt, iterations)
+    return "pbkdf2_sha256$%d$%s$%s" % (
+        iterations,
+        _binascii.hexlify(salt).decode(),
+        _binascii.hexlify(dk).decode()
+    )
+
+# Reemplazar toda tu función _verify_password por esta
+import binascii as _binascii, base64 as _base64, secrets as _secrets, hashlib as _hashlib
+
+def _verify_password(plain: str, stored: str) -> bool:
+    """
+    Verifica contraseñas en formato:
+      pbkdf2_sha256$<iter>$<salt>$<hash>
+    Admitiendo variantes:
+      - Separadores ":" o "$"
+      - Salt/hash en hex o base64
+      - Espacios accidentales
+    También acepta texto plano legado (igualdad directa).
+    """
+    if not stored:
+        return False
+
+    # Compatibilidad texto plano
+    if not stored.startswith("pbkdf2_sha256"):
+        return plain == stored
+
+    try:
+        s = stored.strip()
+
+        # Normalizar separador a "$"
+        s = s.replace(":", "$")
+
+        parts = s.split("$")
+        # Esperamos: ["pbkdf2_sha256", "<iter>", "<salt>", "<hash>"]
+        if len(parts) < 4:
+            return False
+
+        _, it_str, salt_s, hash_s = parts[0], parts[1], parts[2], parts[3]
+
+        # Decode helper: primero intento hex, si falla intento base64
+        def _decode(maybe_hex_or_b64: str):
+            try:
+                return _binascii.unhexlify(maybe_hex_or_b64.encode())
+            except Exception:
+                try:
+                    return _base64.b64decode(maybe_hex_or_b64.encode(), validate=True)
+                except Exception:
+                    return None
+
+        salt = _decode(salt_s)
+        expected = _decode(hash_s)
+        if salt is None or expected is None:
+            return False
+
+        iterations = int(it_str)
+        dk = _hashlib.pbkdf2_hmac("sha256", (plain or "").encode("utf-8"), salt, iterations)
+
+        # compare_digest a prueba de timing
+        return _secrets.compare_digest(dk, expected)
+    except Exception:
+        return False
+    
+def verificar_usuario(usuario: str, password: str):
+    usuario = (usuario or "").strip()
+    password = (password or "")
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT rol FROM usuarios WHERE usuario=? AND password=?", (usuario, password))
+    # ⚠️ Selecciona SOLO por usuario; la contraseña se valida en Python
+    cur.execute("SELECT password, rol FROM usuarios WHERE usuario=?", (usuario,))
     row = cur.fetchone()
     conn.close()
-    return row[0] if row else None
+    if not row:
+        return None
+    stored, rol = row
+    return rol if _verify_password(password, stored) else None
+
 
 def crear_usuario(usuario, password, rol="user"):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("INSERT INTO usuarios (usuario, password, rol) VALUES (?, ?, ?)", (usuario, password, rol))
+    cur.execute("INSERT INTO usuarios (usuario, password, rol) VALUES (?, ?, ?)",
+                (usuario, _hash_password(password), rol))
     conn.commit()
     conn.close()
 
@@ -1141,7 +1388,8 @@ def obtener_usuarios():
 def agregar_usuario(usuario, password, rol):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("INSERT INTO usuarios (usuario, password, rol) VALUES (?, ?, ?)", (usuario, password, rol))
+    cur.execute("INSERT INTO usuarios (usuario, password, rol) VALUES (?, ?, ?)",
+                (usuario, _hash_password(password), rol))
     conn.commit()
     conn.close()
 
@@ -1149,9 +1397,11 @@ def editar_usuario(uid, usuario, password, rol):
     conn = get_connection()
     cur = conn.cursor()
     if password:
-        cur.execute("UPDATE usuarios SET usuario=?, password=?, rol=? WHERE id=?", (usuario, password, rol, uid))
+        cur.execute("UPDATE usuarios SET usuario=?, password=?, rol=? WHERE id=?",
+                    (usuario, _hash_password(password), rol, uid))
     else:
-        cur.execute("UPDATE usuarios SET usuario=?, rol=? WHERE id=?", (usuario, rol, uid))
+        cur.execute("UPDATE usuarios SET usuario=?, rol=? WHERE id=?",
+                    (usuario, rol, uid))
     conn.commit()
     conn.close()
 

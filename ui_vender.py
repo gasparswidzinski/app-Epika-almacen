@@ -177,35 +177,25 @@ class FormularioPOS(QDialog):
 
     # ---------------- Scanner / Búsqueda ----------------
     def _on_text_changed(self, texto):
-        if texto.strip():
+        # Evitar buscar con 1 sola letra; esperar al menos 2 caracteres
+        texto = (texto or "").strip()
+        if texto and len(texto) >= 2:
             self._scan_timer.start(250)
-
+            
     def _buscar_producto(self):
-        q = self.input_buscar.text().strip()
-        if not q:
+        q = (self.input_buscar.text() or "").strip()
+        if len(q) < 2:
             return
 
-        productos = database.obtener_productos()
-        encontrado = None
-        for p in productos:
-            pid, codigo, nombre, cantidad, costo, sector, precio, codigo_barras, movs = p
-            codigo = str(codigo or "").strip().lower()
-            codigo_barras = str(codigo_barras or "").strip().lower()
-            nombre = str(nombre or "").strip().lower()
-            if q.lower() == codigo or q.lower() == codigo_barras or q.lower() in nombre:
-                encontrado = p
-                break
+        try:
+            encontrados = database.buscar_productos(q, limit=100)
+        except Exception as e:
+            QMessageBox.critical(self, "Buscar", f"Error al buscar:\n{e}")
+            return
 
-        if encontrado:
-            self._ultimo_producto = {
-                "id": encontrado[0], "codigo": encontrado[1], "nombre": encontrado[2],
-                "stock": int(encontrado[3]), "precio": float(encontrado[6])
-            }
-            QApplication.beep()
-            self._agregar_al_carrito(cant_override=1, clear_search=True)
-        else:
-            QApplication.beep()
-            QApplication.beep()
+        # 0 resultados → flujo de alta rápida (igual que antes)
+        if not encontrados:
+            QApplication.beep(); QApplication.beep()
             self._alta_rapida_producto(codigo_barras=q)
             prod = database.obtener_producto_por_barcode(q)
             if prod:
@@ -215,10 +205,69 @@ class FormularioPOS(QDialog):
                 }
                 self._agregar_al_carrito(cant_override=1, clear_search=True)
             else:
-                QMessageBox.information(self, "Alta rápida", "Producto creado, pero no se pudo recuperar para agregar al carrito. Vuelva a escanear.")
+                QMessageBox.information(self, "Alta rápida",
+                                        "Producto creado, pero no se pudo recuperar. Vuelva a escanear.")
+            self.input_buscar.clear()
+            self.input_buscar.setFocus()
+            return
+
+        # 1 resultado → agregar directo (match exacto o único resultado)
+        if len(encontrados) == 1:
+            p = encontrados[0]
+            self._ultimo_producto = {
+                "id": p[0], "codigo": p[1], "nombre": p[2],
+                "stock": int(p[3]), "precio": float(p[6])
+            }
+            self._agregar_al_carrito(cant_override=1, clear_search=True)
+            self.input_buscar.clear()
+            self.input_buscar.setFocus()
+            return
+
+        # Varios → mostrar selector para que el usuario elija
+        elegido = self._mostrar_selector_productos(encontrados)
+        if elegido:
+            self._ultimo_producto = {
+                "id": elegido[0], "codigo": elegido[1], "nombre": elegido[2],
+                "stock": int(elegido[3]), "precio": float(elegido[6])
+            }
+            self._agregar_al_carrito(cant_override=1, clear_search=True)
 
         self.input_buscar.clear()
         self.input_buscar.setFocus()
+    
+    def _mostrar_selector_productos(self, filas):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Seleccionar producto")
+        v = QVBoxLayout(dlg)
+
+        tabla = QTableWidget()
+        tabla.setColumnCount(5)
+        tabla.setHorizontalHeaderLabels(["ID", "Código", "Nombre", "Stock", "Precio"])
+        tabla.setRowCount(len(filas))
+        for r, p in enumerate(filas):
+            tabla.setItem(r, 0, QTableWidgetItem(str(p[0])))
+            tabla.setItem(r, 1, QTableWidgetItem(str(p[1] or "")))
+            tabla.setItem(r, 2, QTableWidgetItem(str(p[2] or "")))
+            tabla.setItem(r, 3, QTableWidgetItem(str(p[3] or 0)))
+            tabla.setItem(r, 4, QTableWidgetItem(str(p[6] or 0.0)))
+        tabla.resizeColumnsToContents()
+        tabla.setSelectionBehavior(QTableWidget.SelectRows)
+        tabla.setEditTriggers(QTableWidget.NoEditTriggers)
+        v.addWidget(tabla)
+
+        botones = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        v.addWidget(botones)
+        botones.accepted.connect(dlg.accept)
+        botones.rejected.connect(dlg.reject)
+
+        # doble click = aceptar
+        tabla.itemDoubleClicked.connect(lambda _item: dlg.accept())
+
+        if dlg.exec() == QDialog.Accepted:
+            row = tabla.currentRow()
+            if row >= 0:
+                return filas[row]
+        return None
 
     # ---------------- Alta rápida ----------------
     def _alta_rapida_producto(self, codigo_barras=""):
@@ -364,74 +413,92 @@ class FormularioPOS(QDialog):
             self.lbl_total.setStyleSheet("font-size: 20px; font-weight: bold; color: black;")
 
     def _confirmar_venta(self):
-        if not self.cart:
-            QMessageBox.warning(self, "Carrito vacío", "Agregá productos antes de confirmar")
+        # 1) Validar que haya ítems en el carrito/tabla
+        filas = self.table_cart.rowCount()
+        if filas == 0:
+            QMessageBox.warning(self, "Carrito vacío", "No hay productos en el carrito.")
             return
 
+        # 2) Construir items desde la tabla de carrito
+        items = []
+        total = 0.0
+        for r in range(filas):
+            try:
+                pid = int(self.table_cart.item(r, 0).text())
+                cant = int(self.table_cart.item(r, 3).text())
+                precio = float(str(self.table_cart.item(r, 4).text()).replace(",", "."))
+            except Exception:
+                QMessageBox.warning(self, "Datos inválidos", "Hay valores no numéricos en el carrito.")
+                return
+            if cant <= 0:
+                QMessageBox.warning(self, "Cantidad inválida", "Las cantidades deben ser mayores a cero.")
+                return
+            items.append({"producto_id": pid, "cantidad": cant, "precio_unitario": precio})
+            total += cant * precio
+
+        # 3) Tipo de pago y validaciones específicas
         tipo_pago = self.combo_pago.currentText()
         recibido = None
-        try:
-            recibido = float(self.input_recibido.text()) if self.input_recibido.text().strip() != "" else None
-        except:
-            QMessageBox.warning(self, "Efectivo", "Monto recibido inválido")
-            return
+        vuelto = None
 
-        cliente_id = self.combo_cliente.currentData()
-        if tipo_pago == "Pendiente" and cliente_id is None:
-            QMessageBox.warning(self, "Cliente requerido", "Debés seleccionar un cliente para ventas pendientes (fiado).")
-            return
+        if tipo_pago == "Efectivo":
+            # Parsear aceptando coma o punto
+            try:
+                recibido = float((self.input_recibido.text() or "0").replace(",", "."))
+            except ValueError:
+                QMessageBox.warning(self, "Pago en efectivo", "Monto recibido inválido.")
+                return
 
-        items = [
-            {
-                "producto_id": it["producto_id"],
-                "cantidad": it["cantidad"],
-                "precio_unitario": it["precio_unitario"]
-            }
-            for it in self.cart
-        ]
+            if recibido < total:
+                QMessageBox.warning(self, "Pago en efectivo", "El monto recibido es menor que el total.")
+                return
 
-        ok, res = database.registrar_venta(items, tipo_pago, cliente=cliente_id, efectivo_recibido=recibido)
-        if ok:
-            venta_id = res
-            total = sum(it["cantidad"] * it["precio_unitario"] for it in self.cart)
-            vuelto = (recibido - total) if recibido is not None else None
+            vuelto = round(recibido - total, 2)
 
-            # Confirmación
-            QMessageBox.information(
-                self,
-                "Venta registrada",
-                f"Venta ID {venta_id} registrada.\n"
-                f"Total: ${total:,.2f}\n"
-                f"Tipo: {tipo_pago}\n"
-                f"Vuelto: {vuelto if vuelto is not None else '-'}"
-            )
-
-            # ¿Imprimir ticket?
-            reply = QMessageBox.question(
-                self,
-                "Imprimir Ticket",
-                "¿Querés imprimir el ticket de esta venta?",
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if reply == QMessageBox.Yes:
-                ruta = database.generar_ticket(venta_id, formato="termico")  # 58 mm
-                if ruta:
-                    try:
-                        import os
-                        if os.name == "nt":  # Windows
-                            os.startfile(ruta, "print")
-                        else:  # Linux / macOS
-                            os.system(f"lp '{ruta}'")
-                    except Exception as e:
-                        QMessageBox.warning(
-                            self,
-                            "Ticket",
-                            f"Ticket guardado en {ruta}\nNo se pudo imprimir automáticamente:\n{e}"
-                        )
-            database.limpiar_carrito_temporal()
-            self.accept()
+        elif tipo_pago in ("Transferencia", "QR", "Pendiente"):
+            # No exigimos monto recibido
+            recibido = None
+            vuelto = None
         else:
-            QMessageBox.critical(self, "Error al vender", f"No se pudo registrar: {res}")
+            QMessageBox.warning(self, "Tipo de pago", "Seleccioná un tipo de pago válido.")
+            return
+
+        # 4) Cliente (puede ser None)
+        cliente_id = self.combo_cliente.currentData()
+        # combo carga "(Sin cliente)" con data None; si hay cliente real, será un int
+
+        # 5) Confirmación final
+        resumen = f"Total: ${total:.2f}\nPago: {tipo_pago}"
+        if tipo_pago == "Efectivo":
+            resumen += f"\nRecibido: ${recibido:.2f}\nVuelto: ${vuelto:.2f}"
+        if cliente_id:
+            # Mostrar el texto del combo seleccionado
+            cliente_nombre = self.combo_cliente.currentText()
+            resumen += f"\nCliente: {cliente_nombre}"
+
+        if QMessageBox.question(self, "Confirmar venta", f"{resumen}\n\n¿Registrar la venta?") != QMessageBox.Yes:
+            return
+
+        # 6) Registrar venta en la base
+        try:
+            database.registrar_venta(
+                items=items,
+                tipo_pago=tipo_pago,
+                cliente=cliente_id,              # pasa el id si existe; la función también admite None
+                efectivo_recibido=recibido if tipo_pago == "Efectivo" else None
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo registrar la venta:\n{e}")
+            return
+
+        # 7) Limpieza de UI y cierre
+        self.cart.clear()
+        self.table_cart.setRowCount(0)
+        self.lbl_total.setText("Total: $0.00")
+        self.input_recibido.clear()
+        QMessageBox.information(self, "Venta", "✅ Venta registrada correctamente.")
+        self.accept()
+
 
         
 

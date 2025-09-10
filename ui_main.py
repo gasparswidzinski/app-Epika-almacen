@@ -165,7 +165,10 @@ class MainWindow(QMainWindow):
                    
     def escanear_codigo(self, codigo):
         # Buscar producto por barcode o código interno
-        prod = database.obtener_producto_por_barcode(codigo)
+        codigo = (codigo or "").strip()
+        prod = None
+        if codigo:
+            prod = database.obtener_producto_por_barcode(codigo)
         if not prod:
             for p in database.obtener_productos():
                 pid, cod, nombre, cantidad, costo, sector, precio, codigo_barras, movs = p
@@ -365,73 +368,194 @@ class MainWindow(QMainWindow):
         self.status.showMessage(f"✅ Exportado a {ruta}", 4000)
 
     def importar_excel(self):
-        ruta, _ = QFileDialog.getOpenFileName(self, "Seleccionar Excel", "", "Excel Files (*.xlsx)")
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        import pandas as pd
+        import os
+        import database
+
+        ruta, _ = QFileDialog.getOpenFileName(
+            self,
+            "Importar productos",
+            "",
+            "Excel (*.xlsx *.xls);;CSV (*.csv);;Todos (*.*)"
+        )
         if not ruta:
             return
+
         try:
-            df = pd.read_excel(ruta)
-            cols = [c.strip().lower() for c in df.columns]
-
-            # detectar nombres posibles
-            code_col = None
-            for opt in ["codigo", "código", "code"]:
-                if opt in cols:
-                    code_col = df.columns[cols.index(opt)]
-                    break
-            name_col = None
-            for opt in ["nombre", "name"]:
-                if opt in cols:
-                    name_col = df.columns[cols.index(opt)]
-                    break
-            qty_col = None
-            for opt in ["cantidad", "qty", "quantity"]:
-                if opt in cols:
-                    qty_col = df.columns[cols.index(opt)]
-                    break
-
-            # campos opcionales
-            costo_col = None
-            sector_col = None
-            barras_col = None
-            for i, c in enumerate(cols):
-                if c in ("costo", "cost"):
-                    costo_col = df.columns[i]
-                if c == "sector":
-                    sector_col = df.columns[i]
-                if c in ("codigo barras", "codigo_barras", "codigo de barras", "barcode"):
-                    barras_col = df.columns[i]
-
-            if not (code_col and name_col and qty_col):
-                QMessageBox.warning(self, "Columnas faltantes", "El Excel debe contener al menos: Código, Nombre y Cantidad.")
+            # --- Leer archivo
+            ext = os.path.splitext(ruta)[1].lower()
+            if ext in (".xlsx", ".xls"):
+                df = pd.read_excel(ruta)
+            elif ext == ".csv":
+                # Ajustá sep/encoding si tu export usa otro
+                df = pd.read_csv(ruta)
+            else:
+                QMessageBox.warning(self, "Importar", "Formato no soportado.")
                 return
 
-            # cargar sectores actuales
-            sectores = database.obtener_sectores()
-            sector_map = {s[1]: s[0] for s in sectores}
+            if df.empty:
+                QMessageBox.information(self, "Importar", "El archivo está vacío.")
+                return
 
-            # procesar filas
+            # --- Normalizar nombres de columnas (case-insensitive, sin espacios)
+            colmap = {c: str(c).strip().lower().replace(" ", "_") for c in df.columns}
+            df.rename(columns=colmap, inplace=True)
+
+            # Sinónimos típicos
+            aliases = {
+                "codigo": {"codigo", "código", "sku", "cod"},
+                "nombre": {"nombre", "producto", "descripcion", "descripción"},
+                "stock": {"stock", "cantidad", "cant"},
+                "costo": {"costo", "costo_unitario", "cost"},
+                "sector": {"sector", "rubro", "categoria", "categoría"},
+                "codigo_barras": {"codigo_barras", "código_barras", "ean", "barcode", "codbarras"}
+            }
+
+            def pick(*keys):
+                # devuelve la primera columna presente según alias
+                opts = set()
+                for k in keys:
+                    opts |= aliases.get(k, {k})
+                for name in df.columns:
+                    if name in opts:
+                        return name
+                return None
+
+            code_col   = pick("codigo")
+            name_col   = pick("nombre")
+            qty_col    = pick("stock")
+            costo_col  = pick("costo")
+            sector_col = pick("sector")
+            barras_col = pick("codigo_barras")
+
+            if not name_col:
+                QMessageBox.warning(self, "Importar", "No se encontró la columna de NOMBRE.")
+                return
+            if not (code_col or barras_col):
+                QMessageBox.warning(self, "Importar", "Necesito al menos CÓDIGO o CÓDIGO DE BARRAS.")
+                return
+
+            # --- Cache de sectores
+            sectores = database.obtener_sectores()  # [(id, nombre, margen) o similar]
+            # Construimos un mapa nombre -> id (case-insensitive)
+            sector_map = {}
+            for s in sectores:
+                # intenta soportar ambas estructuras: (id, nombre, margen) o (id, nombre)
+                sid = s[0]
+                snombre = s[1]
+                sector_map[str(snombre).strip().lower()] = sid
+
+            # --- Pre-caché de productos por código para acelerar match (evita loop por fila)
+            productos = database.obtener_productos()  # [(id, codigo, nombre, stock, costo, sector_id, precio, codigo_barras, ...)]
+            by_code = {}
+            for p in productos:
+                try:
+                    if p[1] is not None:
+                        by_code[str(p[1]).strip().lower()] = p
+                except Exception:
+                    pass
+
+            # Contadores
+            inserted = 0
+            updated = 0
+            errores = 0
+
+            # --- Procesar filas
             for _, row in df.iterrows():
-                codigo = str(row[code_col]).strip()
-                nombre = str(row[name_col]).strip()
-                cantidad = int(row[qty_col]) if not pd.isna(row[qty_col]) else 0
-                costo = float(row[costo_col]) if (costo_col and not pd.isna(row[costo_col])) else 0.0
-                sector_nombre = str(row[sector_col]).strip() if (sector_col and not pd.isna(row[sector_col])) else "Almacen"
-                codigo_barras = str(row[barras_col]).strip() if (barras_col and not pd.isna(row[barras_col])) else ""
+                codigo = None
+                if code_col and not pd.isna(row.get(code_col)):
+                    codigo = str(row[code_col]).strip()
+                    if codigo == "":
+                        codigo = None
 
-                if sector_nombre not in sector_map:
+                nombre = str(row[name_col]).strip() if not pd.isna(row.get(name_col)) else ""
+                if not nombre:
+                    # nombre es obligatorio para ambos caminos
+                    errores += 1
+                    continue
+
+                cantidad = 0
+                if qty_col and not pd.isna(row.get(qty_col)):
+                    try:
+                        cantidad = int(float(row[qty_col]))
+                    except Exception:
+                        cantidad = 0
+
+                costo = 0.0
+                if costo_col and not pd.isna(row.get(costo_col)):
+                    try:
+                        costo = float(row[costo_col])
+                    except Exception:
+                        costo = 0.0
+
+                sector_nombre = None
+                if sector_col and not pd.isna(row.get(sector_col)):
+                    sector_nombre = str(row[sector_col]).strip()
+                if not sector_nombre:
+                    sector_nombre = "Almacen"
+
+                codigo_barras = None
+                if barras_col and not pd.isna(row.get(barras_col)):
+                    codigo_barras = str(row[barras_col]).strip()
+                    if codigo_barras == "":
+                        codigo_barras = None  # evita UNIQUE con string vacío
+
+                # Asegurar sector
+                sid = sector_map.get(sector_nombre.strip().lower())
+                if sid is None:
+                    # si el sector no existe, lo creamos con margen por defecto (30%)
                     database.agregar_sector(sector_nombre, 0.30)
+                    # refrescar cache
                     sectores = database.obtener_sectores()
-                    sector_map = {s[1]: s[0] for s in sectores}
+                    sector_map = {str(s[1]).strip().lower(): s[0] for s in sectores}
+                    sid = sector_map.get(sector_nombre.strip().lower())
 
-                sector_id = sector_map.get(sector_nombre)
-                database.agregar_o_actualizar_producto(codigo, nombre, cantidad, costo, sector_id, codigo_barras)
+                # Precio según margen del sector
+                try:
+                    margen = database.obtener_margen_sector(sid)  # espera float (0.30 por ej.)
+                except Exception:
+                    margen = 0.30
+                precio = round((costo or 0.0) * (1 + (margen or 0.0)), 2)
 
-            self.actualizar_tabla()
-            self.actualizar_historial()
-            self.status.showMessage("📥 Importación finalizada", 4000)
+                # --- Upsert: preferir match por código de barras; si no, por código interno
+                prod_exist = None
+
+                if codigo_barras:
+                    try:
+                        prod_exist = database.obtener_producto_por_barcode(codigo_barras)
+                    except Exception:
+                        prod_exist = None
+
+                if not prod_exist and codigo:
+                    prod_exist = by_code.get(codigo.strip().lower())
+
+                try:
+                    if prod_exist:
+                        # prod_exist = (id, codigo, nombre, stock, costo, sector_id, precio, codigo_barras, ...)
+                        pid = int(prod_exist[0])
+                        # ACTUALIZAR en modo ABSOLUTO (stock = cantidad del excel)
+                        database.editar_producto(pid, codigo, nombre, sid, costo, precio, cantidad, codigo_barras)
+                        updated += 1
+                    else:
+                        # INSERTAR (camino existente de tu app)
+                        database.agregar_o_actualizar_producto(codigo, nombre, cantidad, costo, sid, codigo_barras)
+                        inserted += 1
+                except Exception as e:
+                    errores += 1
+                    # si querés loguear: print("Import error:", e)
+
+            QMessageBox.information(
+                self,
+                "Importar",
+                f"✅ Finalizado.\n\nActualizados: {updated}\nInsertados: {inserted}\nErrores: {errores}"
+            )
+            # refrescar tabla de productos
+            if hasattr(self, "cargar_productos"):
+                self.cargar_productos()
 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo importar: {e}")
+            QMessageBox.critical(self, "Importar", f"Error al importar:\n{e}")
 
     # -------------------------
     # Helper Excel (formato tabla: encabezado gris, bordes, autoancho)

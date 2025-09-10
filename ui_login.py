@@ -51,21 +51,23 @@ class LoginDialog(QDialog):
 
     def _login(self):
         user = self.input_user.text().strip()
-        pwd = self.input_pass.text().strip()
+        pwd = self.input_pass.text()  # no strip en password
 
-        if not user or not pwd:
+        if not user or pwd == "":
             QMessageBox.warning(self, "Login", "Ingrese usuario y contraseña")
             return
 
-        conn = database.get_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT rol FROM usuarios WHERE usuario=? AND password=?", (user, pwd))
-        row = cur.fetchone()
-        conn.close()
+        try:
+            rol = database.verificar_usuario(user, pwd)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo verificar el usuario.\n{e}")
+            return
 
-        if row:
-            self.rol = row[0]
-            self.usuario = user 
+        if rol:
+            self.rol = rol
+            self.usuario = user
             self.accept()
         else:
             QMessageBox.critical(self, "Error", "Usuario o contraseña incorrectos")
+            self.input_pass.clear()
+            self.input_pass.setFocus()
