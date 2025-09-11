@@ -30,17 +30,9 @@ class FormularioPOS(QDialog):
         self.btn_nuevo_cliente.clicked.connect(self._crear_cliente_rapido)
         self._cargar_clientes()
         
-        # Recuperar carrito temporal si existe
-        carrito_guardado = database.obtener_carrito_temporal()
-        if carrito_guardado:
-            resp = QMessageBox.question(
-                self,
-                "Carrito anterior encontrado",
-                "Se encontró un carrito sin confirmar.\n¿Querés recuperarlo?"
-            )
-            if resp == QMessageBox.Yes:
-                self.cart = carrito_guardado
-                self._refrescar_carrito()
+        self._venta_confirmada = False
+        self._recupero_carrito_este_sesion = False
+        QTimer.singleShot(0, self._intentar_recuperar_carrito)
 
         # Buscador por código, nombre o barcode
         search_layout = QHBoxLayout()
@@ -448,15 +440,11 @@ class FormularioPOS(QDialog):
             except ValueError:
                 QMessageBox.warning(self, "Pago en efectivo", "Monto recibido inválido.")
                 return
-
             if recibido < total:
                 QMessageBox.warning(self, "Pago en efectivo", "El monto recibido es menor que el total.")
                 return
-
             vuelto = round(recibido - total, 2)
-
         elif tipo_pago in ("Transferencia", "QR", "Pendiente"):
-            # No exigimos monto recibido
             recibido = None
             vuelto = None
         else:
@@ -465,14 +453,12 @@ class FormularioPOS(QDialog):
 
         # 4) Cliente (puede ser None)
         cliente_id = self.combo_cliente.currentData()
-        # combo carga "(Sin cliente)" con data None; si hay cliente real, será un int
 
         # 5) Confirmación final
         resumen = f"Total: ${total:.2f}\nPago: {tipo_pago}"
         if tipo_pago == "Efectivo":
             resumen += f"\nRecibido: ${recibido:.2f}\nVuelto: ${vuelto:.2f}"
         if cliente_id:
-            # Mostrar el texto del combo seleccionado
             cliente_nombre = self.combo_cliente.currentText()
             resumen += f"\nCliente: {cliente_nombre}"
 
@@ -481,24 +467,33 @@ class FormularioPOS(QDialog):
 
         # 6) Registrar venta en la base
         try:
-            database.registrar_venta(
+            ok, info = database.registrar_venta(
                 items=items,
                 tipo_pago=tipo_pago,
-                cliente=cliente_id,              # pasa el id si existe; la función también admite None
+                cliente=cliente_id,
                 efectivo_recibido=recibido if tipo_pago == "Efectivo" else None
             )
+            if not ok:
+                raise Exception(info)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo registrar la venta:\n{e}")
             return
 
-        # 7) Limpieza de UI y cierre
+        # 7) Limpieza de UI, marcar flag y limpiar carrito temporal
         self.cart.clear()
         self.table_cart.setRowCount(0)
         self.lbl_total.setText("Total: $0.00")
         self.input_recibido.clear()
+
+        # >>> clave: marcar venta confirmada y limpiar temporal
+        self._venta_confirmada = True
+        try:
+            database.limpiar_carrito_temporal()
+        except Exception:
+            pass
+
         QMessageBox.information(self, "Venta", "✅ Venta registrada correctamente.")
         self.accept()
-
 
         
 
@@ -532,4 +527,65 @@ class FormularioPOS(QDialog):
             self._agregar_al_carrito(cant_override=1, clear_search=True)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo agregar producto externo:\n{e}")
+    
+    def _intentar_recuperar_carrito(self):
+        if self._recupero_carrito_este_sesion:
+            return
+        try:
+            data = database.obtener_carrito_temporal()
+        except Exception:
+            data = []
+
+        if not data:
+            return
+
+        resp = QMessageBox.question(
+            self, "Carrito anterior encontrado",
+            "Se encontró un carrito sin confirmar.\n¿Querés recuperarlo?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if resp == QMessageBox.Yes:
+            # Cargar el carrito guardado
+            self.cart = []
+            for (row) in data:
+                # data ya viene como dicts desde database.obtener_carrito_temporal()
+                self.cart.append({
+                    "producto_id": row["producto_id"],
+                    "codigo": row["codigo"] or "",
+                    "nombre": row["nombre"] or "",
+                    "cantidad": int(row["cantidad"] or 0),
+                    "precio_unitario": float(row["precio_unitario"] or 0.0),
+                })
+            self._refrescar_carrito()
+            self._recupero_carrito_este_sesion = True
+        else:
+            # Si NO quiere recuperar, limpiamos el temporal para que no vuelva a preguntar
+            try:
+                database.limpiar_carrito_temporal()
+            except Exception:
+                pass
+    
+    def closeEvent(self, event):
+        try:
+            if not getattr(self, "_venta_confirmada", False):
+                # Guardar carrito temporal si hay items
+                items = []
+                for it in self.cart:
+                    items.append({
+                        "producto_id": it["producto_id"],
+                        "codigo": it["codigo"],
+                        "nombre": it["nombre"],
+                        "cantidad": it["cantidad"],
+                        "precio_unitario": it["precio_unitario"],
+                    })
+                if items:
+                    database.guardar_carrito_temporal(items)
+                else:
+                    database.limpiar_carrito_temporal()
+            else:
+                # Si hubo venta, aseguramos limpiar
+                database.limpiar_carrito_temporal()
+        except Exception:
+            pass
+        super().closeEvent(event)
 
