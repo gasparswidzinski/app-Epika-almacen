@@ -358,7 +358,7 @@ class FormularioPOS(QDialog):
             })
         QApplication.beep()
         self._refrescar_carrito()
-        database.guardar_carrito_temporal(self.cart)
+        
         if clear_search:
             self.input_buscar.clear()
             # 👇 no resetear self._ultimo_producto, así se puede usar en próximos escaneos
