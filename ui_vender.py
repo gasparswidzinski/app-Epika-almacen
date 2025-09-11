@@ -403,6 +403,18 @@ class FormularioPOS(QDialog):
         else:
             self.lbl_total.setText(f"Total: ${total:,.2f}")
             self.lbl_total.setStyleSheet("font-size: 20px; font-weight: bold; color: black;")
+    
+    def _imprimir_pdf_automatico(self, ruta_pdf: str):
+        try:
+            import sys, os, subprocess
+            if sys.platform.startswith("win"):
+                os.startfile(ruta_pdf, "print")
+            else:
+                subprocess.run(["lp", ruta_pdf], check=False)
+            return True
+        except Exception as e:
+            QMessageBox.warning(self, "Impresión", f"El ticket se generó, pero no se pudo enviar a la impresora:\n{e}")
+            return False
 
     def _confirmar_venta(self):
         # 1) Validar que haya ítems en el carrito/tabla
@@ -434,7 +446,6 @@ class FormularioPOS(QDialog):
         vuelto = None
 
         if tipo_pago == "Efectivo":
-            # Parsear aceptando coma o punto
             try:
                 recibido = float((self.input_recibido.text() or "0").replace(",", "."))
             except ValueError:
@@ -479,13 +490,26 @@ class FormularioPOS(QDialog):
             QMessageBox.critical(self, "Error", f"No se pudo registrar la venta:\n{e}")
             return
 
+        # 6.1) Preparar datos para el ticket
+        venta_id = info if isinstance(info, int) else (info.get("venta_id") if isinstance(info, dict) else None)
+
+        # 6.2) Elegir tipo de ticket y generar (si corresponde)
+        if venta_id is not None:
+            tipo_ticket = self._elegir_tipo_ticket()  # 'termico', 'a4' o None
+            if tipo_ticket:
+                try:
+                    ruta_ticket = database.generar_ticket(venta_id, formato=tipo_ticket)
+                    self._imprimir_pdf_automatico(ruta_ticket)
+                    # ticket generado y guardado en la carpeta de Tickets
+                except Exception as e:
+                    QMessageBox.warning(self, "Ticket", f"No se pudo generar el ticket:\n{e}")
+
         # 7) Limpieza de UI, marcar flag y limpiar carrito temporal
         self.cart.clear()
         self.table_cart.setRowCount(0)
         self.lbl_total.setText("Total: $0.00")
         self.input_recibido.clear()
 
-        # >>> clave: marcar venta confirmada y limpiar temporal
         self._venta_confirmada = True
         try:
             database.limpiar_carrito_temporal()
@@ -494,6 +518,7 @@ class FormularioPOS(QDialog):
 
         QMessageBox.information(self, "Venta", "✅ Venta registrada correctamente.")
         self.accept()
+
 
         
 
@@ -588,4 +613,24 @@ class FormularioPOS(QDialog):
         except Exception:
             pass
         super().closeEvent(event)
+    
+    def _elegir_tipo_ticket(self):
+        """
+        Devuelve 'termico', 'a4' o None según lo que elija el usuario.
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle("Tipo de ticket")
+        box.setIcon(QMessageBox.Question)
+        box.setText("¿Qué tipo de ticket querés generar?")
+        btn_termico = box.addButton("Térmico", QMessageBox.AcceptRole)
+        btn_a4 = box.addButton("A4", QMessageBox.AcceptRole)
+        btn_cancel = box.addButton("No imprimir", QMessageBox.RejectRole)
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked is btn_termico:
+            return "termico"
+        if clicked is btn_a4:
+            return "a4"
+        return None
 

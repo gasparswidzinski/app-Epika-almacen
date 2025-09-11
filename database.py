@@ -23,6 +23,10 @@ from datetime import datetime
 
 APP_NAME = "GestorDeStock"
 
+# === Config Ticket ===
+TICKET_COMERCIO_NOMBRE = "Epika Almacén" 
+FORMATO_TICKET = "termico"    
+
 def _get_progdata() -> str:
     base = os.environ.get("PROGRAMDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
     target = os.path.join(base, APP_NAME)
@@ -1213,15 +1217,19 @@ def generar_ticket_termico(venta_id, ruta):
     return ruta
 
 def generar_ticket(venta_id, formato=None):
-    """Wrapper: crea carpeta, arma ruta y delega según formato."""
-    os.makedirs("tickets", exist_ok=True)
-    ruta = os.path.join("tickets", f"ticket_{venta_id}.pdf")
-    fmt = (formato or FORMATO_TICKET).lower()
+    """Crea el PDF del ticket en %ProgramData%\GestorDeStock\Tickets\ y devuelve la ruta."""
+    base = os.environ.get("ProgramData", os.getcwd())
+    out_dir = os.path.join(base, APP_NAME, "Tickets")
+    os.makedirs(out_dir, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ruta = os.path.join(out_dir, f"ticket_{venta_id}_{stamp}.pdf")
 
+    fmt = (formato or FORMATO_TICKET).lower()
     if fmt == "a4":
         return generar_ticket_a4(venta_id, ruta)
     else:
         return generar_ticket_termico(venta_id, ruta)
+
 
 def guardar_carrito_temporal(lista_items):
     """Guarda el carrito actual en la tabla temporal."""
