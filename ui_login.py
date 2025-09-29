@@ -2,6 +2,7 @@
 from PySide6.QtWidgets import QDialog, QFormLayout, QLineEdit, QDialogButtonBox, QMessageBox
 import database
 
+
 class LoginDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -24,9 +25,10 @@ class LoginDialog(QDialog):
         buttons.rejected.connect(self.reject)
 
         self.rol = None  # se guarda el rol al validar
-        
+
         # 🎨 Estilos para hacer el login más lindo
-        self.setStyleSheet("""
+        self.setStyleSheet(
+            """
             QDialog {
                 background-color: #f7f7f7;
                 border-radius: 12px;
@@ -47,7 +49,8 @@ class LoginDialog(QDialog):
             QDialogButtonBox QPushButton:hover {
                 background-color: #005a9e;
             }
-        """)
+        """
+        )
 
     def _login(self):
         user = self.input_user.text().strip()

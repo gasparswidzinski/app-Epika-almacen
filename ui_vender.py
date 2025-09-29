@@ -1,13 +1,25 @@
-#ui_vender.py
+# ui_vender.py
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QPushButton,
-    QLineEdit, QMessageBox, QComboBox, QTableWidget, QTableWidgetItem,
-    QFormLayout, QDialogButtonBox, QApplication
+    QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QSpinBox,
+    QPushButton,
+    QLineEdit,
+    QMessageBox,
+    QComboBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QFormLayout,
+    QDialogButtonBox,
+    QApplication,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence
 import database
 import os
+
 
 class FormularioPOS(QDialog):
     def __init__(self, parent=None, producto_preseleccionado=None):
@@ -29,7 +41,7 @@ class FormularioPOS(QDialog):
         layout.addLayout(cliente_layout)
         self.btn_nuevo_cliente.clicked.connect(self._crear_cliente_rapido)
         self._cargar_clientes()
-        
+
         self._venta_confirmada = False
         self._recupero_carrito_este_sesion = False
         QTimer.singleShot(0, self._intentar_recuperar_carrito)
@@ -119,13 +131,16 @@ class FormularioPOS(QDialog):
                 pid, codigo, nombre, cantidad, costo, sector, precio, codigo_barras, movs = producto_preseleccionado
                 if int(cantidad) > 0:
                     self._ultimo_producto = {
-                        "id": pid, "codigo": codigo, "nombre": nombre,
-                        "stock": int(cantidad), "precio": float(precio)
+                        "id": pid,
+                        "codigo": codigo,
+                        "nombre": nombre,
+                        "stock": int(cantidad),
+                        "precio": float(precio),
                     }
                     self._agregar_al_carrito(cant_override=1, clear_search=False)
             except Exception:
                 pass
-        
+
         QTimer.singleShot(0, self.input_buscar.setFocus)
 
     # ---------------- Clientes ----------------
@@ -173,7 +188,7 @@ class FormularioPOS(QDialog):
         texto = (texto or "").strip()
         if texto and len(texto) >= 2:
             self._scan_timer.start(250)
-            
+
     def _buscar_producto(self):
         q = (self.input_buscar.text() or "").strip()
         if len(q) < 2:
@@ -187,18 +202,23 @@ class FormularioPOS(QDialog):
 
         # 0 resultados → flujo de alta rápida (igual que antes)
         if not encontrados:
-            QApplication.beep(); QApplication.beep()
+            QApplication.beep()
+            QApplication.beep()
             self._alta_rapida_producto(codigo_barras=q)
             prod = database.obtener_producto_por_barcode(q)
             if prod:
                 self._ultimo_producto = {
-                    "id": prod[0], "codigo": prod[1], "nombre": prod[2],
-                    "stock": int(prod[3]), "precio": float(prod[6]) if len(prod) > 6 else 0.0
+                    "id": prod[0],
+                    "codigo": prod[1],
+                    "nombre": prod[2],
+                    "stock": int(prod[3]),
+                    "precio": float(prod[6]) if len(prod) > 6 else 0.0,
                 }
                 self._agregar_al_carrito(cant_override=1, clear_search=True)
             else:
-                QMessageBox.information(self, "Alta rápida",
-                                        "Producto creado, pero no se pudo recuperar. Vuelva a escanear.")
+                QMessageBox.information(
+                    self, "Alta rápida", "Producto creado, pero no se pudo recuperar. Vuelva a escanear."
+                )
             self.input_buscar.clear()
             self.input_buscar.setFocus()
             return
@@ -207,8 +227,11 @@ class FormularioPOS(QDialog):
         if len(encontrados) == 1:
             p = encontrados[0]
             self._ultimo_producto = {
-                "id": p[0], "codigo": p[1], "nombre": p[2],
-                "stock": int(p[3]), "precio": float(p[6])
+                "id": p[0],
+                "codigo": p[1],
+                "nombre": p[2],
+                "stock": int(p[3]),
+                "precio": float(p[6]),
             }
             self._agregar_al_carrito(cant_override=1, clear_search=True)
             self.input_buscar.clear()
@@ -219,14 +242,17 @@ class FormularioPOS(QDialog):
         elegido = self._mostrar_selector_productos(encontrados)
         if elegido:
             self._ultimo_producto = {
-                "id": elegido[0], "codigo": elegido[1], "nombre": elegido[2],
-                "stock": int(elegido[3]), "precio": float(elegido[6])
+                "id": elegido[0],
+                "codigo": elegido[1],
+                "nombre": elegido[2],
+                "stock": int(elegido[3]),
+                "precio": float(elegido[6]),
             }
             self._agregar_al_carrito(cant_override=1, clear_search=True)
 
         self.input_buscar.clear()
         self.input_buscar.setFocus()
-    
+
     def _mostrar_selector_productos(self, filas):
         dlg = QDialog(self)
         dlg.setWindowTitle("Seleccionar producto")
@@ -263,8 +289,7 @@ class FormularioPOS(QDialog):
 
     # ---------------- Alta rápida ----------------
     def _alta_rapida_producto(self, codigo_barras=""):
-        
-        
+
         d = QDialog(self)
         d.setWindowTitle("Alta rápida de producto")
         form = QFormLayout(d)
@@ -325,12 +350,11 @@ class FormularioPOS(QDialog):
                     cantidad=cantidad,
                     costo=costo,
                     sector_id=sector_id,
-                    codigo_barras=codigo
+                    codigo_barras=codigo,
                 )
                 QMessageBox.information(self, "Producto agregado", f"✅ Producto '{nombre}' agregado correctamente.")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"No se pudo agregar el producto: {e}")
-
 
     # ---------------- Carrito ----------------
     def _agregar_al_carrito(self, cant_override=None, clear_search=False):
@@ -349,16 +373,18 @@ class FormularioPOS(QDialog):
                 it["cantidad"] += cant
                 break
         else:
-            self.cart.append({
-                "producto_id": self._ultimo_producto["id"],
-                "codigo": self._ultimo_producto["codigo"],
-                "nombre": self._ultimo_producto["nombre"],
-                "cantidad": cant,
-                "precio_unitario": self._ultimo_producto.get("precio", 0)
-            })
+            self.cart.append(
+                {
+                    "producto_id": self._ultimo_producto["id"],
+                    "codigo": self._ultimo_producto["codigo"],
+                    "nombre": self._ultimo_producto["nombre"],
+                    "cantidad": cant,
+                    "precio_unitario": self._ultimo_producto.get("precio", 0),
+                }
+            )
         QApplication.beep()
         self._refrescar_carrito()
-        
+
         if clear_search:
             self.input_buscar.clear()
             # 👇 no resetear self._ultimo_producto, así se puede usar en próximos escaneos
@@ -403,10 +429,11 @@ class FormularioPOS(QDialog):
         else:
             self.lbl_total.setText(f"Total: ${total:,.2f}")
             self.lbl_total.setStyleSheet("font-size: 20px; font-weight: bold; color: black;")
-    
+
     def _imprimir_pdf_automatico(self, ruta_pdf: str):
         try:
             import sys, os, subprocess
+
             if sys.platform.startswith("win"):
                 os.startfile(ruta_pdf, "print")
             else:
@@ -482,7 +509,7 @@ class FormularioPOS(QDialog):
                 items=items,
                 tipo_pago=tipo_pago,
                 cliente=cliente_id,
-                efectivo_recibido=recibido if tipo_pago == "Efectivo" else None
+                efectivo_recibido=recibido if tipo_pago == "Efectivo" else None,
             )
             if not ok:
                 raise Exception(info)
@@ -519,9 +546,6 @@ class FormularioPOS(QDialog):
         QMessageBox.information(self, "Venta", "✅ Venta registrada correctamente.")
         self.accept()
 
-
-        
-
     def obtener_carrito(self):
         return self.cart
 
@@ -529,7 +553,7 @@ class FormularioPOS(QDialog):
         texto = texto.strip()
         if len(texto) >= 6:
             self._buscar_producto()
-    
+
     def agregar_producto_externo(self, prod):
         """
         Permite que MainWindow agregue un producto al carrito cuando ya hay un POS abierto.
@@ -546,13 +570,13 @@ class FormularioPOS(QDialog):
                 "codigo": codigo,
                 "nombre": nombre,
                 "stock": int(cantidad),
-                "precio": float(precio)
+                "precio": float(precio),
             }
             # Agregamos al carrito directamente (1 unidad)
             self._agregar_al_carrito(cant_override=1, clear_search=True)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo agregar producto externo:\n{e}")
-    
+
     def _intentar_recuperar_carrito(self):
         if self._recupero_carrito_este_sesion:
             return
@@ -565,22 +589,25 @@ class FormularioPOS(QDialog):
             return
 
         resp = QMessageBox.question(
-            self, "Carrito anterior encontrado",
+            self,
+            "Carrito anterior encontrado",
             "Se encontró un carrito sin confirmar.\n¿Querés recuperarlo?",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No,
         )
         if resp == QMessageBox.Yes:
             # Cargar el carrito guardado
             self.cart = []
-            for (row) in data:
+            for row in data:
                 # data ya viene como dicts desde database.obtener_carrito_temporal()
-                self.cart.append({
-                    "producto_id": row["producto_id"],
-                    "codigo": row["codigo"] or "",
-                    "nombre": row["nombre"] or "",
-                    "cantidad": int(row["cantidad"] or 0),
-                    "precio_unitario": float(row["precio_unitario"] or 0.0),
-                })
+                self.cart.append(
+                    {
+                        "producto_id": row["producto_id"],
+                        "codigo": row["codigo"] or "",
+                        "nombre": row["nombre"] or "",
+                        "cantidad": int(row["cantidad"] or 0),
+                        "precio_unitario": float(row["precio_unitario"] or 0.0),
+                    }
+                )
             self._refrescar_carrito()
             self._recupero_carrito_este_sesion = True
         else:
@@ -589,20 +616,22 @@ class FormularioPOS(QDialog):
                 database.limpiar_carrito_temporal()
             except Exception:
                 pass
-    
+
     def closeEvent(self, event):
         try:
             if not getattr(self, "_venta_confirmada", False):
                 # Guardar carrito temporal si hay items
                 items = []
                 for it in self.cart:
-                    items.append({
-                        "producto_id": it["producto_id"],
-                        "codigo": it["codigo"],
-                        "nombre": it["nombre"],
-                        "cantidad": it["cantidad"],
-                        "precio_unitario": it["precio_unitario"],
-                    })
+                    items.append(
+                        {
+                            "producto_id": it["producto_id"],
+                            "codigo": it["codigo"],
+                            "nombre": it["nombre"],
+                            "cantidad": it["cantidad"],
+                            "precio_unitario": it["precio_unitario"],
+                        }
+                    )
                 if items:
                     database.guardar_carrito_temporal(items)
                 else:
@@ -613,7 +642,7 @@ class FormularioPOS(QDialog):
         except Exception:
             pass
         super().closeEvent(event)
-    
+
     def _elegir_tipo_ticket(self):
         """
         Devuelve 'termico', 'a4' o None según lo que elija el usuario.
@@ -633,4 +662,3 @@ class FormularioPOS(QDialog):
         if clicked is btn_a4:
             return "a4"
         return None
-

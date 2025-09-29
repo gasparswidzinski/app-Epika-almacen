@@ -9,15 +9,18 @@ from ui_usuarios import UsuarioForm
 
 # (limpieza) quitamos imports duplicados de os, shutil
 
+
 def respaldo_automatico():
     import os, shutil
     from database import DATA_DIR, DB_PATH
+
     backups_dir = os.path.join(DATA_DIR, "backups")
     os.makedirs(backups_dir, exist_ok=True)
     fecha = datetime.now().strftime("%Y-%m-%d")
     destino = os.path.join(backups_dir, f"almacen_{fecha}.db")
     if not os.path.exists(destino) and os.path.exists(DB_PATH):
         shutil.copy(DB_PATH, destino)
+
 
 if __name__ == "__main__":
     # (robustez) si hay un fallo en inicializar_db, avisamos y salimos prolijamente
@@ -60,7 +63,7 @@ if __name__ == "__main__":
             None,
             "Primer inicio",
             "Estás entrando por primera vez con el usuario admin.\n\n"
-            "Debés crear tu usuario administrador personalizado antes de continuar."
+            "Debés crear tu usuario administrador personalizado antes de continuar.",
         )
 
         while True:
@@ -78,7 +81,7 @@ if __name__ == "__main__":
                     QMessageBox.information(
                         None,
                         "Usuario creado",
-                        f"✅ Usuario '{user}' creado correctamente.\n\nAhora podés usar la aplicación con tu nueva cuenta."
+                        f"✅ Usuario '{user}' creado correctamente.\n\nAhora podés usar la aplicación con tu nueva cuenta.",
                     )
                     break
                 except Exception as e:

@@ -1,10 +1,8 @@
 # ui_formulario.py
-from PySide6.QtWidgets import (
-    QDialog, QFormLayout, QLineEdit, QSpinBox, QComboBox,
-    QDialogButtonBox, QMessageBox
-)
+from PySide6.QtWidgets import QDialog, QFormLayout, QLineEdit, QSpinBox, QComboBox, QDialogButtonBox, QMessageBox
 from PySide6.QtCore import Qt
 import database
+
 
 class FormularioProducto(QDialog):
     """
@@ -13,6 +11,7 @@ class FormularioProducto(QDialog):
       producto: tuple/row opcional (id, codigo, nombre, cantidad, costo, sector_nombre, precio, codigo_barras, movs)
       codigo_barras: si se pasa, lo precarga en el campo correspondiente (útil para scanner)
     """
+
     def __init__(self, parent=None, producto=None, codigo_barras=""):
         super().__init__(parent)
         self.setWindowTitle("Agregar/Editar Producto")

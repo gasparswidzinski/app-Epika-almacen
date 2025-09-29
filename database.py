@@ -15,8 +15,6 @@ from pathlib import Path
 import os as _os, hashlib as _hashlib, binascii as _binascii
 
 
-
-
 # --- Rutas robustas: usar ProgramData para que siempre sea visible ---
 import os, sys, sqlite3
 from datetime import datetime
@@ -24,14 +22,16 @@ from datetime import datetime
 APP_NAME = "GestorDeStock"
 
 # === Config Ticket ===
-TICKET_COMERCIO_NOMBRE = "Epika Almacén" 
-FORMATO_TICKET = "termico"    
+TICKET_COMERCIO_NOMBRE = "Epika Almacén"
+FORMATO_TICKET = "termico"
+
 
 def _get_progdata() -> str:
     base = os.environ.get("PROGRAMDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
     target = os.path.join(base, APP_NAME)
     os.makedirs(target, exist_ok=True)
     return target
+
 
 def _scan_msstore_localcache_candidates() -> list:
     """Origen típico de Python MS Store: ...\Local\Packages\PythonSoftwareFoundation...\LocalCache\Roaming\GestorDeStock"""
@@ -46,9 +46,11 @@ def _scan_msstore_localcache_candidates() -> list:
         pass
     return cands
 
+
 def _migrar_a(dest_dir: str):
     """Si hay DB en orígenes conocidos, copiarla a dest_dir/almacen.db (una sola vez)."""
     import shutil
+
     new_db = os.path.join(dest_dir, "almacen.db")
     if os.path.exists(new_db):
         return  # ya hay DB en destino
@@ -79,10 +81,11 @@ def _migrar_a(dest_dir: str):
         legacy = os.path.join(exe_dir, "almacen.db")
         if os.path.exists(legacy):
             bkp = os.path.join(exe_dir, f"almacen_legacy_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
-            shutil.copy(legacy, bkp)          # respaldo junto al exe
-            shutil.copy(legacy, new_db)       # migración efectiva
+            shutil.copy(legacy, bkp)  # respaldo junto al exe
+            shutil.copy(legacy, new_db)  # migración efectiva
     except Exception as e:
         print("⚠️ No se pudo migrar desde la carpeta del ejecutable:", e)
+
 
 # Directorio de datos definitivo (ProgramData)
 DATA_DIR = _get_progdata()
@@ -90,10 +93,12 @@ _migrar_a(DATA_DIR)
 
 DB_PATH = os.path.join(DATA_DIR, "almacen.db")
 
+
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
 
 def _migrar_db_si_corresponde():
     """
@@ -105,9 +110,10 @@ def _migrar_db_si_corresponde():
         vieja = os.path.join(exe_dir, "almacen.db")
         if os.path.exists(vieja) and not os.path.exists(DB_PATH):
             import shutil
+
             bkp = os.path.join(exe_dir, f"almacen_legacy_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
-            shutil.copy(vieja, bkp)     # respaldo por las dudas
-            shutil.copy(vieja, DB_PATH) # migración efectiva
+            shutil.copy(vieja, bkp)  # respaldo por las dudas
+            shutil.copy(vieja, DB_PATH)  # migración efectiva
     except Exception as e:
         print("⚠️ No se pudo migrar DB:", e)
 
@@ -121,16 +127,19 @@ def inicializar_db():
     cur = conn.cursor()
 
     # Tabla sectores (si no existe)
-    cur.execute("""
+    cur.execute(
+        """
     CREATE TABLE IF NOT EXISTS sectores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nombre TEXT UNIQUE NOT NULL,
         margen REAL NOT NULL
     )
-    """)
+    """
+    )
 
     # Tabla productos
-    cur.execute("""
+    cur.execute(
+        """
     CREATE TABLE IF NOT EXISTS productos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         codigo TEXT UNIQUE NOT NULL,
@@ -143,10 +152,12 @@ def inicializar_db():
         movimientos INTEGER DEFAULT 0,
         FOREIGN KEY(sector_id) REFERENCES sectores(id)
     )
-    """)
+    """
+    )
 
     # Tabla movimientos (historial)
-    cur.execute("""
+    cur.execute(
+        """
     CREATE TABLE IF NOT EXISTS movimientos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         producto_id INTEGER,
@@ -157,10 +168,12 @@ def inicializar_db():
         detalles TEXT,
         FOREIGN KEY(producto_id) REFERENCES productos(id)
     )
-    """)
+    """
+    )
 
     # Tabla ventas (mantenemos la columna 'cliente' por compatibilidad)
-    cur.execute("""
+    cur.execute(
+        """
     CREATE TABLE IF NOT EXISTS ventas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         fecha TEXT NOT NULL,
@@ -171,7 +184,8 @@ def inicializar_db():
         vuelto REAL,
         cliente TEXT
     )
-    """)
+    """
+    )
 
     # Si no existe la columna cliente_id la agregamos (migración)
     cur.execute("PRAGMA table_info(ventas)")
@@ -183,7 +197,8 @@ def inicializar_db():
             pass
 
     # Tabla items de venta
-    cur.execute("""
+    cur.execute(
+        """
     CREATE TABLE IF NOT EXISTS venta_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         venta_id INTEGER NOT NULL,
@@ -194,10 +209,12 @@ def inicializar_db():
         FOREIGN KEY(venta_id) REFERENCES ventas(id),
         FOREIGN KEY(producto_id) REFERENCES productos(id)
     )
-    """)
+    """
+    )
 
     # Tabla clientes
-    cur.execute("""
+    cur.execute(
+        """
     CREATE TABLE IF NOT EXISTS clientes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nombre TEXT NOT NULL,
@@ -205,10 +222,12 @@ def inicializar_db():
         direccion TEXT,
         notas TEXT
     )
-    """)
+    """
+    )
 
     # Tabla cobros (cuando se cobran ventas pendientes)
-    cur.execute("""
+    cur.execute(
+        """
     CREATE TABLE IF NOT EXISTS cobros (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         venta_id INTEGER,
@@ -219,15 +238,11 @@ def inicializar_db():
         FOREIGN KEY(venta_id) REFERENCES ventas(id),
         FOREIGN KEY(cliente_id) REFERENCES clientes(id)
     )
-    """)
+    """
+    )
 
     # Semillas sectores (si no existen)
-    default = [
-        ("Fiambreria", 0.60),
-        ("Panaderia", 0.40),
-        ("Lacteos", 0.35),
-        ("Almacen", 0.30)
-    ]
+    default = [("Fiambreria", 0.60), ("Panaderia", 0.40), ("Lacteos", 0.35), ("Almacen", 0.30)]
     for nombre, margen in default:
         try:
             cur.execute("INSERT INTO sectores (nombre, margen) VALUES (?, ?)", (nombre, margen))
@@ -235,7 +250,8 @@ def inicializar_db():
             pass
 
     # Tabla gastos (almacén y personal)
-    cur.execute("""
+    cur.execute(
+        """
     CREATE TABLE IF NOT EXISTS gastos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         fecha TEXT NOT NULL,
@@ -244,10 +260,12 @@ def inicializar_db():
         detalle TEXT,
         tipo TEXT NOT NULL CHECK(tipo IN ('almacen','personal'))
     )
-    """)
-    
+    """
+    )
+
     # --- Nueva tabla para carrito temporal ---
-    cur.execute("""
+    cur.execute(
+        """
     CREATE TABLE IF NOT EXISTS carrito_temporal (
         producto_id INTEGER,
         codigo TEXT,
@@ -255,25 +273,30 @@ def inicializar_db():
         cantidad REAL,
         precio_unitario REAL
     )
-    """)
-    
-        # Tabla categorías de gastos
-    cur.execute("""
+    """
+    )
+
+    # Tabla categorías de gastos
+    cur.execute(
+        """
     CREATE TABLE IF NOT EXISTS categorias_gasto (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nombre TEXT UNIQUE NOT NULL,
         tipo TEXT NOT NULL CHECK(tipo IN ('almacen','personal'))
     )
-    """)
+    """
+    )
 
     # Semillas de categorías de gastos (solo si no existen)
-    default_cats_almacen = [
-        "Proveedores", "Sueldos", "Alquiler", "Luz",
-        "Impuestos", "Contador", "Agua", "Otros"
-    ]
+    default_cats_almacen = ["Proveedores", "Sueldos", "Alquiler", "Luz", "Impuestos", "Contador", "Agua", "Otros"]
     default_cats_personal = [
-        "Alquiler Vivienda", "Comida", "Transporte",
-        "Educación", "Salud", "Entretenimiento", "Otros"
+        "Alquiler Vivienda",
+        "Comida",
+        "Transporte",
+        "Educación",
+        "Salud",
+        "Entretenimiento",
+        "Otros",
     ]
 
     for nombre in default_cats_almacen:
@@ -287,9 +310,10 @@ def inicializar_db():
             cur.execute("INSERT INTO categorias_gasto (nombre, tipo) VALUES (?, ?)", (nombre, "personal"))
         except sqlite3.IntegrityError:
             pass
-        
-     # Tabla usuarios
-    cur.execute("""
+
+    # Tabla usuarios
+    cur.execute(
+        """
     CREATE TABLE IF NOT EXISTS usuarios (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         usuario TEXT UNIQUE NOT NULL,
@@ -297,39 +321,47 @@ def inicializar_db():
         rol TEXT NOT NULL CHECK(rol IN ('admin','user','developer'))
 
     )
-    """)
+    """
+    )
 
     # --- Asegurar usuarios por defecto (si faltan) ---
     try:
         cur.execute("SELECT 1 FROM usuarios WHERE usuario='admin'")
         if not cur.fetchone():
-            cur.execute("INSERT INTO usuarios (usuario,password,rol) VALUES (?,?,?)",
-                        ('admin', _hash_password('admin'), 'admin'))
+            cur.execute(
+                "INSERT INTO usuarios (usuario,password,rol) VALUES (?,?,?)",
+                ("admin", _hash_password("admin"), "admin"),
+            )
         cur.execute("SELECT 1 FROM usuarios WHERE usuario='developer'")
         if not cur.fetchone():
-            cur.execute("INSERT INTO usuarios (usuario,password,rol) VALUES (?,?,?)",
-                        ('developer', _hash_password('developer'), 'developer'))
+            cur.execute(
+                "INSERT INTO usuarios (usuario,password,rol) VALUES (?,?,?)",
+                ("developer", _hash_password("developer"), "developer"),
+            )
     except Exception as e:
         print("⚠️ No se pudo asegurar usuarios por defecto:", e)
 
-        
     # --- Índice único condicional para código de barras (evita duplicados no nulos) ---
     try:
-        cur.execute("""
+        cur.execute(
+            """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_prod_barcode
             ON productos(codigo_barras)
             WHERE codigo_barras IS NOT NULL
-        """)
+        """
+        )
     except Exception:
         # Si existen duplicados hoy, el índice no se creará.
         # La app sigue funcionando; al depurar duplicados, se creará en el próximo arranque.
         pass
-    
+
     conn.commit()
     conn.close()
 
+
 # Alias
 init_db = inicializar_db
+
 
 # -----------------------------
 # SECTORES
@@ -342,12 +374,14 @@ def obtener_sectores():
     conn.close()
     return data
 
+
 def agregar_sector(nombre, margen):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("INSERT INTO sectores (nombre, margen) VALUES (?, ?)", (nombre, margen))
     conn.commit()
     conn.close()
+
 
 def editar_sector(id_sector, nombre, margen):
     conn = get_connection()
@@ -356,12 +390,14 @@ def editar_sector(id_sector, nombre, margen):
     conn.commit()
     conn.close()
 
+
 def eliminar_sector(id_sector):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("DELETE FROM sectores WHERE id=?", (id_sector,))
     conn.commit()
     conn.close()
+
 
 def obtener_margen_sector(id_sector):
     if id_sector is None:
@@ -373,6 +409,7 @@ def obtener_margen_sector(id_sector):
     conn.close()
     return row[0] if row else 0.0
 
+
 # -----------------------------
 # MOVIMIENTOS
 # -----------------------------
@@ -381,24 +418,29 @@ def agregar_movimiento(producto_id, tipo, cambio, precio_unitario, detalles=""):
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO movimientos (producto_id, tipo, cambio, precio_unitario, fecha, detalles) VALUES (?, ?, ?, ?, ?, ?)",
-        (producto_id, tipo, cambio, precio_unitario, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), detalles)
+        (producto_id, tipo, cambio, precio_unitario, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), detalles),
     )
     conn.commit()
     conn.close()
 
+
 def obtener_movimientos(limit=100):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT m.id, p.nombre, m.tipo, m.cambio, m.precio_unitario, m.fecha, m.detalles
         FROM movimientos m
         LEFT JOIN productos p ON p.id = m.producto_id
         ORDER BY m.id DESC
         LIMIT ?
-    """, (limit,))
+    """,
+        (limit,),
+    )
     data = cur.fetchall()
     conn.close()
     return data
+
 
 # -----------------------------
 # PRODUCTOS
@@ -408,20 +450,23 @@ def agregar_producto(codigo, nombre, cantidad, costo, sector_id, codigo_barras):
         codigo_barras = None
     margen = obtener_margen_sector(sector_id)
     precio = round((costo or 0.0) + ((costo or 0.0) * (margen or 0.0)), 2)
-    
 
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO productos (codigo, nombre, cantidad, costo, sector_id, precio, codigo_barras, movimientos)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (codigo, nombre, cantidad, costo, sector_id, precio, codigo_barras, 0))
+    """,
+        (codigo, nombre, cantidad, costo, sector_id, precio, codigo_barras, 0),
+    )
     producto_id = cur.lastrowid
     conn.commit()
     conn.close()
 
     agregar_movimiento(producto_id, "INGRESO", cantidad, precio, detalles="Alta/Ingreso inicial")
     return producto_id
+
 
 def agregar_o_actualizar_producto(codigo, nombre, cantidad, costo, sector_id=None, codigo_barras=""):
     """
@@ -460,7 +505,8 @@ def agregar_o_actualizar_producto(codigo, nombre, cantidad, costo, sector_id=Non
         # Si no hay costo, precio=0.0 (evita None)
         precio = round((costo_final or 0.0) * (1 + (margen or 0.0)), 2) if costo_final is not None else 0.0
 
-        cur.execute("""
+        cur.execute(
+            """
             UPDATE productos
                SET cantidad = ?,
                    costo = ?,
@@ -468,7 +514,9 @@ def agregar_o_actualizar_producto(codigo, nombre, cantidad, costo, sector_id=Non
                    precio = ?,
                    codigo_barras = ?
              WHERE id = ?
-        """, (new_cant, costo_final, sector_final, precio, codigo_barras, producto_id))
+        """,
+            (new_cant, costo_final, sector_final, precio, codigo_barras, producto_id),
+        )
         conn.commit()
         conn.close()
 
@@ -480,6 +528,7 @@ def agregar_o_actualizar_producto(codigo, nombre, cantidad, costo, sector_id=Non
         conn.close()
         return agregar_producto(codigo, nombre, cantidad or 0, costo, sector_id, codigo_barras)
 
+
 def eliminar_producto(id_producto):
     conn = get_connection()
     cur = conn.cursor()
@@ -490,21 +539,25 @@ def eliminar_producto(id_producto):
     conn.close()
 
     if row:
-         agregar_movimiento(None, "ELIM", 0, row[1] or 0, detalles=f"Eliminado: {row[0]}")
+        agregar_movimiento(None, "ELIM", 0, row[1] or 0, detalles=f"Eliminado: {row[0]}")
+
 
 def obtener_productos():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT p.id, p.codigo, p.nombre, p.cantidad, p.costo,
                COALESCE(s.nombre, '') as sector, p.precio, COALESCE(p.codigo_barras, ''), p.movimientos
         FROM productos p
         LEFT JOIN sectores s ON p.sector_id = s.id
         ORDER BY p.nombre COLLATE NOCASE
-    """)
+    """
+    )
     data = cur.fetchall()
     conn.close()
     return data
+
 
 # --- NUEVO: búsqueda flexible de productos (prioriza match exacto por código / barcode)
 def buscar_productos(query, limit=50):
@@ -522,7 +575,8 @@ def buscar_productos(query, limit=50):
     cur = conn.cursor()
 
     # 1) Match exacto por código interno o código de barras
-    cur.execute("""
+    cur.execute(
+        """
         SELECT p.id, p.codigo, p.nombre, p.cantidad, p.costo,
                COALESCE(s.nombre, '') as sector, p.precio, COALESCE(p.codigo_barras, ''), p.movimientos
         FROM productos p
@@ -531,7 +585,9 @@ def buscar_productos(query, limit=50):
            OR LOWER(COALESCE(p.codigo_barras,'')) = LOWER(?)
         ORDER BY p.nombre COLLATE NOCASE
         LIMIT ?
-    """, (q, q, limit))
+    """,
+        (q, q, limit),
+    )
     exactos = cur.fetchall()
     if exactos:
         conn.close()
@@ -539,7 +595,8 @@ def buscar_productos(query, limit=50):
 
     # 2) Búsqueda por contiene (insensible a mayúsculas)
     like = f"%{q}%"
-    cur.execute("""
+    cur.execute(
+        """
         SELECT p.id, p.codigo, p.nombre, p.cantidad, p.costo,
                COALESCE(s.nombre, '') as sector, p.precio, COALESCE(p.codigo_barras, ''), p.movimientos
         FROM productos p
@@ -549,10 +606,13 @@ def buscar_productos(query, limit=50):
            OR COALESCE(p.codigo_barras,'') LIKE ? COLLATE NOCASE
         ORDER BY p.nombre COLLATE NOCASE
         LIMIT ?
-    """, (like, like, like, limit))
+    """,
+        (like, like, like, limit),
+    )
     data = cur.fetchall()
     conn.close()
     return data
+
 
 # -----------------------------
 # STOCK / VENTAS
@@ -579,26 +639,33 @@ def modificar_stock(producto_id, cantidad_cambio, detalles=""):
     agregar_movimiento(producto_id, tipo, cantidad_cambio, prod[1] or 0.0, detalles=detalles)
     return True
 
+
 # -----------------------------
 # CLIENTES (nueva funcionalidad FASE 2)
 # -----------------------------
 def agregar_cliente(nombre, telefono="", direccion="", notas=""):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("INSERT INTO clientes (nombre, telefono, direccion, notas) VALUES (?, ?, ?, ?)",
-                (nombre, telefono, direccion, notas))
+    cur.execute(
+        "INSERT INTO clientes (nombre, telefono, direccion, notas) VALUES (?, ?, ?, ?)",
+        (nombre, telefono, direccion, notas),
+    )
     cid = cur.lastrowid
     conn.commit()
     conn.close()
     return cid
 
+
 def editar_cliente(cid, nombre, telefono="", direccion="", notas=""):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("UPDATE clientes SET nombre=?, telefono=?, direccion=?, notas=? WHERE id=?",
-                (nombre, telefono, direccion, notas, cid))
+    cur.execute(
+        "UPDATE clientes SET nombre=?, telefono=?, direccion=?, notas=? WHERE id=?",
+        (nombre, telefono, direccion, notas, cid),
+    )
     conn.commit()
     conn.close()
+
 
 def eliminar_cliente(cid):
     conn = get_connection()
@@ -608,6 +675,7 @@ def eliminar_cliente(cid):
     conn.commit()
     conn.close()
 
+
 def obtener_clientes():
     conn = get_connection()
     cur = conn.cursor()
@@ -616,19 +684,23 @@ def obtener_clientes():
     conn.close()
     return data
 
+
 def obtener_clientes_con_saldo():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT c.id, c.nombre, COALESCE(SUM(v.total),0) as deuda, COUNT(v.id) as cant_pendientes
         FROM clientes c
         LEFT JOIN ventas v ON v.cliente_id = c.id AND v.estado='PENDIENTE'
         GROUP BY c.id
         ORDER BY deuda DESC
-    """)
+    """
+    )
     data = cur.fetchall()
     conn.close()
     return data
+
 
 # -----------------------------
 # VENTAS
@@ -662,10 +734,13 @@ def registrar_venta(items, tipo_pago, cliente=None, efectivo_recibido=None):
 
         # Iniciar transacción
         cur.execute("BEGIN")
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO ventas (fecha, tipo_pago, estado, total, efectivo_recibido, vuelto, cliente, cliente_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (fecha, tipo_pago, estado, total, efectivo_recibido, vuelto, cliente_text, cliente_id))
+        """,
+            (fecha, tipo_pago, estado, total, efectivo_recibido, vuelto, cliente_text, cliente_id),
+        )
         venta_id = cur.lastrowid
 
         # procesar items: verificar stock y descontar
@@ -688,14 +763,19 @@ def registrar_venta(items, tipo_pago, cliente=None, efectivo_recibido=None):
             cur.execute("UPDATE productos SET cantidad=? WHERE id=?", (current - cant, pid))
 
             # insertar item
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO venta_items (venta_id, producto_id, cantidad, precio_unitario, subtotal)
                 VALUES (?, ?, ?, ?, ?)
-            """, (venta_id, pid, cant, precio_unit, subtotal))
+            """,
+                (venta_id, pid, cant, precio_unit, subtotal),
+            )
 
             # registrar movimiento tipo VENTA (cantidad negativa)
-            cur.execute("INSERT INTO movimientos (producto_id, tipo, cambio, precio_unitario, fecha, detalles) VALUES (?, ?, ?, ?, ?, ?)",
-                        (pid, "VENTA", -cant, precio_unit, fecha, f"Venta ID {venta_id}"))
+            cur.execute(
+                "INSERT INTO movimientos (producto_id, tipo, cambio, precio_unitario, fecha, detalles) VALUES (?, ?, ?, ?, ?, ?)",
+                (pid, "VENTA", -cant, precio_unit, fecha, f"Venta ID {venta_id}"),
+            )
 
         conn.commit()
         conn.close()
@@ -704,6 +784,7 @@ def registrar_venta(items, tipo_pago, cliente=None, efectivo_recibido=None):
         conn.rollback()
         conn.close()
         return False, str(e)
+
 
 def obtener_ventas(fecha_inicio=None, fecha_fin=None, estado=None):
     conn = get_connection()
@@ -728,21 +809,27 @@ def obtener_ventas(fecha_inicio=None, fecha_fin=None, estado=None):
     conn.close()
     return data
 
+
 def obtener_items_venta(venta_id):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT vi.id, vi.producto_id, p.nombre, vi.cantidad, vi.precio_unitario, vi.subtotal
         FROM venta_items vi
         JOIN productos p ON p.id = vi.producto_id
         WHERE vi.venta_id = ?
-    """, (venta_id,))
+    """,
+        (venta_id,),
+    )
     data = cur.fetchall()
     conn.close()
     return data
 
+
 def obtener_ventas_pendientes():
     return obtener_ventas(estado="PENDIENTE")
+
 
 def marcar_venta_pagada(venta_id, tipo_pago_nuevo=None, recibido=None):
     conn = get_connection()
@@ -765,16 +852,21 @@ def marcar_venta_pagada(venta_id, tipo_pago_nuevo=None, recibido=None):
     if recibido is not None:
         vuelto = round(recibido - total, 2)
 
-    cur.execute("UPDATE ventas SET estado=?, tipo_pago=?, efectivo_recibido=?, vuelto=? WHERE id=?",
-                ("PAGADO", nuevo_tipo, recibido, vuelto, venta_id))
+    cur.execute(
+        "UPDATE ventas SET estado=?, tipo_pago=?, efectivo_recibido=?, vuelto=? WHERE id=?",
+        ("PAGADO", nuevo_tipo, recibido, vuelto, venta_id),
+    )
 
     # insertar registro de cobro
-    cur.execute("INSERT INTO cobros (venta_id, cliente_id, fecha, monto, tipo_pago) VALUES (?, ?, ?, ?, ?)",
-                (venta_id, cliente_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), total, nuevo_tipo))
+    cur.execute(
+        "INSERT INTO cobros (venta_id, cliente_id, fecha, monto, tipo_pago) VALUES (?, ?, ?, ?, ?)",
+        (venta_id, cliente_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), total, nuevo_tipo),
+    )
 
     conn.commit()
     conn.close()
     return True, "Venta marcada como pagada"
+
 
 def reembolsar_venta(venta_id, items_to_refund=None):
     conn = get_connection()
@@ -789,18 +881,24 @@ def reembolsar_venta(venta_id, items_to_refund=None):
 
         # Traer los ítems de la venta
         if items_to_refund is None:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id, producto_id, cantidad, precio_unitario, subtotal
                 FROM venta_items WHERE venta_id=?
-            """, (venta_id,))
+            """,
+                (venta_id,),
+            )
             items = cur.fetchall()
         else:
             placeholders = ",".join("?" for _ in items_to_refund)
-            cur.execute(f"""
+            cur.execute(
+                f"""
                 SELECT id, producto_id, cantidad, precio_unitario, subtotal
                 FROM venta_items
                 WHERE id IN ({placeholders})
-            """, tuple(items_to_refund))
+            """,
+                tuple(items_to_refund),
+            )
             items = cur.fetchall()
 
         fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -814,10 +912,13 @@ def reembolsar_venta(venta_id, items_to_refund=None):
             cur.execute("UPDATE productos SET cantidad = cantidad + ? WHERE id=?", (cant, pid))
 
             # Registrar movimiento
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO movimientos (producto_id, tipo, cambio, precio_unitario, fecha, detalles)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (pid, "REEMBOLSO", cant, precio_unit, fecha, f"Reembolso de venta {venta_id}"))
+            """,
+                (pid, "REEMBOLSO", cant, precio_unit, fecha, f"Reembolso de venta {venta_id}"),
+            )
 
             # Eliminar el ítem de la venta
             cur.execute("DELETE FROM venta_items WHERE id=?", (vi_id,))
@@ -832,7 +933,6 @@ def reembolsar_venta(venta_id, items_to_refund=None):
         conn.rollback()
         conn.close()
         return False, str(e)
-
 
 
 # -----------------------------
@@ -851,6 +951,7 @@ def ventas_resumen_por_tipo(fecha_inicio=None, fecha_fin=None):
     data = cur.fetchall()
     conn.close()
     return data
+
 
 def obtener_ventas_con_detalles():
     conn = get_connection()
@@ -871,17 +972,20 @@ def obtener_ventas_con_detalles():
         }
 
         # Traer los items de cada venta con ID real del item
-        cur.execute("""
+        cur.execute(
+            """
             SELECT vi.id, vi.producto_id, p.nombre, vi.cantidad, vi.precio_unitario, vi.subtotal
             FROM venta_items vi
             JOIN productos p ON vi.producto_id = p.id
             WHERE vi.venta_id=?
-        """, (venta["id"],))
+        """,
+            (venta["id"],),
+        )
         items = cur.fetchall()
 
         venta["items"] = [
             {
-                "id": it[0],             # ID real de venta_items
+                "id": it[0],  # ID real de venta_items
                 "producto_id": it[1],
                 "nombre": it[2],
                 "cantidad": it[3],
@@ -900,16 +1004,20 @@ def obtener_ventas_con_detalles():
 def obtener_producto_por_barcode(codigo_barras):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT p.id, p.codigo, p.nombre, p.cantidad, p.costo,
                COALESCE(s.nombre, '') as sector, p.precio, COALESCE(p.codigo_barras, ''), p.movimientos
         FROM productos p
         LEFT JOIN sectores s ON p.sector_id = s.id
         WHERE p.codigo_barras = ?
-    """, (codigo_barras,))
+    """,
+        (codigo_barras,),
+    )
     prod = cur.fetchone()
     conn.close()
     return prod
+
 
 # -----------------------------
 # GASTOS (Almacén y Personales)
@@ -918,12 +1026,16 @@ def agregar_gasto(categoria, monto, detalle="", tipo="almacen"):
     conn = get_connection()
     cur = conn.cursor()
     fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO gastos (fecha, categoria, monto, detalle, tipo)
         VALUES (?, ?, ?, ?, ?)
-    """, (fecha, categoria, monto, detalle, tipo))
+    """,
+        (fecha, categoria, monto, detalle, tipo),
+    )
     conn.commit()
     conn.close()
+
 
 def obtener_gastos(tipo="almacen", fecha_inicio=None, fecha_fin=None):
     conn = get_connection()
@@ -947,6 +1059,7 @@ def obtener_gastos(tipo="almacen", fecha_inicio=None, fecha_fin=None):
     conn.close()
     return rows
 
+
 def obtener_resumen_gastos(tipo="almacen", fecha_inicio=None, fecha_fin=None):
     conn = get_connection()
     cur = conn.cursor()
@@ -969,6 +1082,7 @@ def obtener_resumen_gastos(tipo="almacen", fecha_inicio=None, fecha_fin=None):
     conn.close()
     return rows
 
+
 def eliminar_gasto(gasto_id):
     conn = get_connection()
     cur = conn.cursor()
@@ -987,8 +1101,9 @@ def exportar_gastos_excel(tipo="almacen", filename="gastos.xlsx", fecha_inicio=N
     ws1 = wb.active
     ws1.title = "Detalle"
 
-    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'),
-                         top=Side(style='thin'), bottom=Side(style='thin'))
+    thin_border = Border(
+        left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin")
+    )
 
     # Encabezado
     ws1.merge_cells("A1:E1")
@@ -1090,38 +1205,47 @@ def exportar_gastos_excel(tipo="almacen", filename="gastos.xlsx", fecha_inicio=N
     wb.save(filename)
     return filename
 
+
 # --------- Tickets ---------
 
 # Elegí el formato por defecto: "termico" (58 mm) o "a4"
 FORMATO_TICKET = "termico"
+
 
 def _datos_venta_y_items(venta_id):
     """Devuelve (venta, items) con nombre de cliente ya resuelto."""
     conn = get_connection()
     cur = conn.cursor()
     # Traemos la venta y el nombre del cliente (si existe)
-    cur.execute("""
+    cur.execute(
+        """
         SELECT v.fecha, v.tipo_pago, v.total, v.efectivo_recibido, v.vuelto,
                COALESCE(c.nombre, 'Consumidor Final') AS cliente_nombre
         FROM ventas v
         LEFT JOIN clientes c ON c.id = v.cliente_id
         WHERE v.id = ?
-    """, (venta_id,))
+    """,
+        (venta_id,),
+    )
     venta = cur.fetchone()
     if not venta:
         conn.close()
         return None, None
 
     # Traemos items con nombre de producto
-    cur.execute("""
+    cur.execute(
+        """
         SELECT p.nombre, vi.cantidad, vi.precio_unitario, vi.subtotal
         FROM venta_items vi
         JOIN productos p ON p.id = vi.producto_id
         WHERE vi.venta_id = ?
-    """, (venta_id,))
+    """,
+        (venta_id,),
+    )
     items = cur.fetchall()
     conn.close()
     return venta, items
+
 
 def generar_ticket_a4(venta_id, ruta):
     venta, items = _datos_venta_y_items(venta_id)
@@ -1130,36 +1254,37 @@ def generar_ticket_a4(venta_id, ruta):
 
     ancho, alto = A4
     c = canvas.Canvas(ruta, pagesize=A4)
-    y = alto - 20*mm
+    y = alto - 20 * mm
 
     c.setFont("Helvetica-Bold", 14)
-    c.drawCentredString(ancho/2, y, "Mi Almacén")
-    y -= 10*mm
+    c.drawCentredString(ancho / 2, y, "Mi Almacén")
+    y -= 10 * mm
 
     c.setFont("Helvetica", 10)
-    c.drawString(20*mm, y, f"Fecha: {venta[0]}")
-    y -= 5*mm
-    c.drawString(20*mm, y, f"Cliente: {venta[5]}")
-    y -= 10*mm
+    c.drawString(20 * mm, y, f"Fecha: {venta[0]}")
+    y -= 5 * mm
+    c.drawString(20 * mm, y, f"Cliente: {venta[5]}")
+    y -= 10 * mm
 
-    c.drawString(20*mm, y, "Cant  Producto              P.Unit   Subtotal")
-    y -= 5*mm
+    c.drawString(20 * mm, y, "Cant  Producto              P.Unit   Subtotal")
+    y -= 5 * mm
     for nombre, cant, precio, subtotal in items:
-        c.drawString(20*mm, y, f"{cant:>3}  {nombre[:20]:<20} {precio:>7.2f}  {subtotal:>7.2f}")
-        y -= 5*mm
+        c.drawString(20 * mm, y, f"{cant:>3}  {nombre[:20]:<20} {precio:>7.2f}  {subtotal:>7.2f}")
+        y -= 5 * mm
 
-    y -= 10*mm
+    y -= 10 * mm
     c.setFont("Helvetica-Bold", 12)
-    c.drawString(20*mm, y, f"TOTAL: ${venta[2]:.2f}")
-    y -= 7*mm
+    c.drawString(20 * mm, y, f"TOTAL: ${venta[2]:.2f}")
+    y -= 7 * mm
     c.setFont("Helvetica", 10)
-    c.drawString(20*mm, y, f"Pago: {venta[1]}")
+    c.drawString(20 * mm, y, f"Pago: {venta[1]}")
     if venta[1] == "Efectivo":
-        y -= 5*mm
-        c.drawString(20*mm, y, f"Recibido: ${venta[3] or 0:.2f}  Vuelto: ${venta[4] or 0:.2f}")
+        y -= 5 * mm
+        c.drawString(20 * mm, y, f"Recibido: ${venta[3] or 0:.2f}  Vuelto: ${venta[4] or 0:.2f}")
 
     c.save()
     return ruta
+
 
 def generar_ticket_termico(venta_id, ruta):
     """Ticket térmico 58 mm de ancho."""
@@ -1174,7 +1299,7 @@ def generar_ticket_termico(venta_id, ruta):
 
     # Encabezado
     c.setFont("Helvetica-Bold", 10)
-    c.drawCentredString(ancho/2, y, "Mi Almacén")
+    c.drawCentredString(ancho / 2, y, "Mi Almacén")
     y -= 6 * mm
 
     c.setFont("Helvetica", 7)
@@ -1211,10 +1336,11 @@ def generar_ticket_termico(venta_id, ruta):
     # Mensaje final
     y -= 8 * mm
     c.setFont("Helvetica-Oblique", 7)
-    c.drawCentredString(ancho/2, y, "¡Gracias por su compra!")
+    c.drawCentredString(ancho / 2, y, "¡Gracias por su compra!")
 
     c.save()
     return ruta
+
 
 def generar_ticket(venta_id, formato=None):
     """Crea el PDF del ticket en %ProgramData%\GestorDeStock\Tickets\ y devuelve la ruta."""
@@ -1237,12 +1363,16 @@ def guardar_carrito_temporal(lista_items):
     cursor = conn.cursor()
     cursor.execute("DELETE FROM carrito_temporal")
     for it in lista_items:
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO carrito_temporal (producto_id, codigo, nombre, cantidad, precio_unitario)
             VALUES (?, ?, ?, ?, ?)
-        """, (it["producto_id"], it["codigo"], it["nombre"], it["cantidad"], it["precio_unitario"]))
+        """,
+            (it["producto_id"], it["codigo"], it["nombre"], it["cantidad"], it["precio_unitario"]),
+        )
     conn.commit()
     conn.close()
+
 
 def obtener_carrito_temporal():
     """Devuelve lista de items del carrito temporal."""
@@ -1252,9 +1382,9 @@ def obtener_carrito_temporal():
     rows = cursor.fetchall()
     conn.close()
     return [
-        {"producto_id": r[0], "codigo": r[1], "nombre": r[2], "cantidad": r[3], "precio_unitario": r[4]}
-        for r in rows
+        {"producto_id": r[0], "codigo": r[1], "nombre": r[2], "cantidad": r[3], "precio_unitario": r[4]} for r in rows
     ]
+
 
 def limpiar_carrito_temporal():
     """Borra el carrito temporal de la base."""
@@ -1263,7 +1393,8 @@ def limpiar_carrito_temporal():
     cursor.execute("DELETE FROM carrito_temporal")
     conn.commit()
     conn.close()
-    
+
+
 # -----------------------------
 # CATEGORÍAS DE GASTOS
 # -----------------------------
@@ -1271,16 +1402,19 @@ def agregar_categoria_gasto(nombre, tipo="almacen"):
     """Agrega una categoría de gasto si no existe."""
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS categorias_gasto (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nombre TEXT UNIQUE NOT NULL,
             tipo TEXT NOT NULL CHECK(tipo IN ('almacen','personal'))
         )
-    """)
+    """
+    )
     cur.execute("INSERT OR IGNORE INTO categorias_gasto (nombre, tipo) VALUES (?, ?)", (nombre, tipo))
     conn.commit()
     conn.close()
+
 
 def obtener_categorias_gasto(tipo="almacen"):
     """Devuelve lista de nombres de categorías según tipo."""
@@ -1297,14 +1431,12 @@ def _hash_password(plain: str, iterations: int = 200_000) -> str:
         plain = ""
     salt = _os.urandom(16)
     dk = _hashlib.pbkdf2_hmac("sha256", plain.encode("utf-8"), salt, iterations)
-    return "pbkdf2_sha256$%d$%s$%s" % (
-        iterations,
-        _binascii.hexlify(salt).decode(),
-        _binascii.hexlify(dk).decode()
-    )
+    return "pbkdf2_sha256$%d$%s$%s" % (iterations, _binascii.hexlify(salt).decode(), _binascii.hexlify(dk).decode())
+
 
 # Reemplazar toda tu función _verify_password por esta
 import binascii as _binascii, base64 as _base64, secrets as _secrets, hashlib as _hashlib
+
 
 def _verify_password(plain: str, stored: str) -> bool:
     """
@@ -1358,10 +1490,11 @@ def _verify_password(plain: str, stored: str) -> bool:
         return _secrets.compare_digest(dk, expected)
     except Exception:
         return False
-    
+
+
 def verificar_usuario(usuario: str, password: str):
     usuario = (usuario or "").strip()
-    password = (password or "")
+    password = password or ""
     conn = get_connection()
     cur = conn.cursor()
     # ⚠️ Selecciona SOLO por usuario; la contraseña se valida en Python
@@ -1377,10 +1510,12 @@ def verificar_usuario(usuario: str, password: str):
 def crear_usuario(usuario, password, rol="user"):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("INSERT INTO usuarios (usuario, password, rol) VALUES (?, ?, ?)",
-                (usuario, _hash_password(password), rol))
+    cur.execute(
+        "INSERT INTO usuarios (usuario, password, rol) VALUES (?, ?, ?)", (usuario, _hash_password(password), rol)
+    )
     conn.commit()
     conn.close()
+
 
 # -----------------------------
 # USUARIOS
@@ -1393,25 +1528,29 @@ def obtener_usuarios():
     conn.close()
     return data
 
+
 def agregar_usuario(usuario, password, rol):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("INSERT INTO usuarios (usuario, password, rol) VALUES (?, ?, ?)",
-                (usuario, _hash_password(password), rol))
+    cur.execute(
+        "INSERT INTO usuarios (usuario, password, rol) VALUES (?, ?, ?)", (usuario, _hash_password(password), rol)
+    )
     conn.commit()
     conn.close()
+
 
 def editar_usuario(uid, usuario, password, rol):
     conn = get_connection()
     cur = conn.cursor()
     if password:
-        cur.execute("UPDATE usuarios SET usuario=?, password=?, rol=? WHERE id=?",
-                    (usuario, _hash_password(password), rol, uid))
+        cur.execute(
+            "UPDATE usuarios SET usuario=?, password=?, rol=? WHERE id=?", (usuario, _hash_password(password), rol, uid)
+        )
     else:
-        cur.execute("UPDATE usuarios SET usuario=?, rol=? WHERE id=?",
-                    (usuario, rol, uid))
+        cur.execute("UPDATE usuarios SET usuario=?, rol=? WHERE id=?", (usuario, rol, uid))
     conn.commit()
     conn.close()
+
 
 def eliminar_usuario(uid):
     conn = get_connection()

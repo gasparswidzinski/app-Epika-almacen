@@ -1,9 +1,19 @@
 # ui_usuarios.py
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-    QPushButton, QMessageBox, QLineEdit, QComboBox, QFormLayout, QDialogButtonBox
+    QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QTableWidget,
+    QTableWidgetItem,
+    QPushButton,
+    QMessageBox,
+    QLineEdit,
+    QComboBox,
+    QFormLayout,
+    QDialogButtonBox,
 )
 import database
+
 
 class UsuariosDialog(QDialog):
     def __init__(self, parent=None):
@@ -122,8 +132,4 @@ class UsuarioForm(QDialog):
         buttons.rejected.connect(self.reject)
 
     def get_data(self):
-        return (
-            self.input_user.text().strip(),
-            self.input_pass.text().strip(),
-            self.input_rol.currentText()
-        )
+        return (self.input_user.text().strip(), self.input_pass.text().strip(), self.input_rol.currentText())
