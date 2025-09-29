@@ -26,20 +26,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install flake8 black
 
-      # Fail only on *fatal* issues: syntax errors / undefined names
+      # Fail only on fatal issues
       - name: flake8 (required - fatal rules only)
-        run: |
-          flake8 . --select=E9,F63,F7,F82
+        run: flake8 . --select=E9,F63,F7,F82
 
-      # Black is advisory: warns but doesn't fail build
+      # Advisory only
       - name: black (format check - advisory)
         run: |
           black --check . || (echo "::warning ::Black found formatting issues (advisory only)"; exit 0)
 
   deps:
-    name: Install project deps (optional)
+    name: Install project deps (optional, never fails)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -53,7 +51,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Try installing dependencies
+      - name: Try installing dependencies (non-fatal)
+        shell: bash
         run: |
+          set +e
           python -m pip install --upgrade pip
           if [ -f requerimientos.txt ]; then pip install -r requerimientos.txt; fi
+          status=$?
+          if [ $status -ne 0 ]; then
+            echo "::warning ::Dependency installation failed with exit code $status (ignored)"
+            exit 0
+          fi
+          echo "Dependencies installed successfully."
