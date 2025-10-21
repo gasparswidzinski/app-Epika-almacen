@@ -170,8 +170,9 @@ class MainWindow(QMainWindow):
     # SCANNER
     # -------------------------
     def _on_scanner_text_changed(self, texto):
-        if texto.strip():
-            # esperamos un poquito a que el lector termine de "escribir"
+        texto = (texto or "").strip()
+        # Solo disparar el "scanner" si parece un código de barras (todo dígitos y largo mínimo)
+        if texto.isdigit() and len(texto) >= 12:  # 12/13 si usás EAN/UPC
             self._scan_timer.start(250)
 
     def _procesar_scanner(self):

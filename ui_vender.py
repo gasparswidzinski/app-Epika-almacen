@@ -184,10 +184,11 @@ class FormularioPOS(QDialog):
 
     # ---------------- Scanner / Búsqueda ----------------
     def _on_text_changed(self, texto):
-        # Evitar buscar con 1 sola letra; esperar al menos 2 caracteres
+        # Solo activar el "scanner" si parece un código de barras (todo dígitos y largo mínimo)
         texto = (texto or "").strip()
-        if texto and len(texto) >= 2:
+        if texto.isdigit() and len(texto) >= 8:
             self._scan_timer.start(250)
+
 
     def _buscar_producto(self):
         q = (self.input_buscar.text() or "").strip()
@@ -200,28 +201,35 @@ class FormularioPOS(QDialog):
             QMessageBox.critical(self, "Buscar", f"Error al buscar:\n{e}")
             return
 
-        # 0 resultados → flujo de alta rápida (igual que antes)
+        # 0 resultados → ALTA RÁPIDA solo si parece código de barras
         if not encontrados:
-            QApplication.beep()
-            QApplication.beep()
-            self._alta_rapida_producto(codigo_barras=q)
-            prod = database.obtener_producto_por_barcode(q)
-            if prod:
-                self._ultimo_producto = {
-                    "id": prod[0],
-                    "codigo": prod[1],
-                    "nombre": prod[2],
-                    "stock": int(prod[3]),
-                    "precio": float(prod[6]) if len(prod) > 6 else 0.0,
-                }
-                self._agregar_al_carrito(cant_override=1, clear_search=True)
+            es_barcode = q.isdigit() and len(q) >= 8  # subí a 12/13 si usás EAN/UPC
+            if es_barcode:
+                QApplication.beep()
+                QApplication.beep()
+                self._alta_rapida_producto(codigo_barras=q)
+                prod = database.obtener_producto_por_barcode(q)
+                if prod:
+                    self._ultimo_producto = {
+                        "id": prod[0],
+                        "codigo": prod[1],
+                        "nombre": prod[2],
+                        "stock": int(prod[3]),
+                        "precio": float(prod[6]) if len(prod) > 6 else 0.0,
+                    }
+                    self._agregar_al_carrito(cant_override=1, clear_search=True)
+                else:
+                    QMessageBox.information(
+                        self, "Alta rápida", "Producto creado, pero no se pudo recuperar. Vuelva a escanear."
+                    )
             else:
-                QMessageBox.information(
-                    self, "Alta rápida", "Producto creado, pero no se pudo recuperar. Vuelva a escanear."
-                )
+                # Búsqueda textual sin resultados → NO abrir alta rápida
+                QMessageBox.information(self, "Buscar", f"No se encontraron productos para «{q}».")
             self.input_buscar.clear()
             self.input_buscar.setFocus()
             return
+
+
 
         # 1 resultado → agregar directo (match exacto o único resultado)
         if len(encontrados) == 1:
